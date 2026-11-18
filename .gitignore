@@ -10,3 +10,4 @@ result
 .direnv/
 .envrc
 *.md.tmp
+examples/
