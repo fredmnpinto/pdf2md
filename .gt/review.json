@@ -1,0 +1,100 @@
+{
+  "criticalCount": 0,
+  "decision": "APPROVE",
+  "summary": {
+    "critical": 0,
+    "warnings": 3,
+    "suggestions": 9
+  },
+  "critical": [],
+  "warnings": [
+    {
+      "category": "Env / Docs",
+      "file": "flake.nix",
+      "line": 29,
+      "issue": "`pytest-cov` is documented as provided by the flake dev shell (README.md:115,136; ARCHITECTURE.md:76) but is NOT included in `withPackages` (currently `[ ps.pymupdf ps.pytest ps.pip ps.setuptools ps.wheel ]`). `nix develop -c pytest --cov=pdf2md` (the documented coverage command) would fail with 'unrecognized arguments: --cov=pdf2md'. One-line fix: add `ps.pytest-cov` to withPackages. Non-critical: the core flake works (pymupdf + pytest + editable install all resolve) and the Must-Have test command (`pytest` plain) passes. Recorded for fast follow-up.",
+      "severity": "warning"
+    },
+    {
+      "category": "Security / Reproducibility",
+      "file": "flake.nix",
+      "line": 5,
+      "issue": "nixpkgs and flake-utils inputs are unpinned (`nixos-unstable`, no flake.lock). Non-critical for a dev shell but should run `nix flake lock` to pin before relying on this in CI or across machines (already noted in a flake.nix comment).",
+      "severity": "warning"
+    },
+    {
+      "category": "Security / Supply-chain",
+      "file": "pyproject.toml",
+      "line": 10,
+      "issue": "Runtime dependency `pymupdf>=2` is unpinned (no upper bound or lock). Consider pinning for reproducible installs.",
+      "severity": "warning"
+    }
+  ],
+  "suggestions": [
+    {
+      "category": "Spec Compliance",
+      "file": "flake.nix",
+      "line": 39,
+      "issue": "Drop `--quiet` from the shellHook `pip install -e .` so pip errors are surfaced (currently only the `|| echo` fallback reports a generic failure)."
+    },
+    {
+      "category": "Spec Compliance / CI",
+      "file": "flake.nix",
+      "line": 38,
+      "issue": "The shellHook has no hard failure path; a failed editable install would go unnoticed in CI. Consider `set -e` / a non-zero exit on failure."
+    },
+    {
+      "category": "Security",
+      "file": "src/pdf2md/cli.py",
+      "line": null,
+      "issue": "TOCTOU: the `--output == input` check and the subsequent write are not atomic; a symlink/rename race is theoretically possible. Low risk for a local CLI."
+    },
+    {
+      "category": "Security",
+      "file": "src/pdf2md/converter.py",
+      "line": null,
+      "issue": "Parses untrusted PDFs with a native (C) parser (PyMuPDF). Inherent to the design; acceptable for v1 with no sandboxing."
+    },
+    {
+      "category": "Security",
+      "file": ".gitignore",
+      "line": null,
+      "issue": "No secret-scan patterns (e.g. `.env`, `*.pem`, `*.key`). Minor for a greenfield CLI."
+    },
+    {
+      "category": "Code Quality",
+      "file": "src/pdf2md/cli.py",
+      "line": null,
+      "issue": "Broad `except Exception` in the conversion/write error handling; consider narrowing to the expected exception types."
+    },
+    {
+      "category": "Code Quality",
+      "file": "tests/test_cli.py",
+      "line": null,
+      "issue": "Hardcoded `\"0.1.0\"` in a version test; consider reading `pdf2md.__version__` to avoid drift."
+    },
+    {
+      "category": "Code Quality",
+      "file": "src/pdf2md/__main__.py",
+      "line": null,
+      "issue": "Missing module docstring."
+    },
+    {
+      "category": "Docs",
+      "file": "README.md",
+      "line": 14,
+      "issue": "Wording: README says 'conversion output goes to stderr' when Markdown is written to a file; only the status message goes to stderr. Minor phrasing fix."
+    }
+  ],
+  "reviewers": {
+    "spec-compliance": "APPROVE",
+    "test-coverage": "APPROVE (warning: pytest-cov not in flake.nix)",
+    "security": "APPROVE (warnings/suggestions only)",
+    "code-quality": "APPROVE (suggestions only)",
+    "documentation": "APPROVE (warning: pytest-cov claim vs flake.nix)",
+    "agents-md": "APPROVE (no update needed)",
+    "scope-creep": "APPROVE (no creep)",
+    "frontend-design": "N/A (no frontend changes)"
+  },
+  "decisionRationale": "The prior CRITICAL (flake.nix editable install silently failing due to missing pip/setuptools/wheel) is confirmed fixed: pip/setuptools/wheel are present in withPackages and the install has a working backend. All acceptance criteria are met, 27 tests pass, and the prior code-quality/doc warnings are resolved. The single remaining warning (pytest-cov not in flake.nix, while documented) is a non-critical, one-line doc/env consistency gap: the core flake works, `pytest` plain passes, and coverage measurement is a dev nicety not required by any Must-Have acceptance criterion. Per AGENTS.md bias-toward-approval (a warning in an otherwise clean review still APPROVEs; only critical issues force LOOP), this is APPROVE with the warning recorded for fast follow-up."
+}

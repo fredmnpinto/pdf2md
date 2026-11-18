@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pdf2md"
+dynamic = ["version"]
+description = "Convert PDF files to Markdown via PyMuPDF's built-in converter"
+requires-python = ">=3.9"
+dependencies = ["pymupdf>=2,<3"]
+
+[project.optional-dependencies]
+dev = ["pytest", "pytest-cov"]
+
+[project.scripts]
+pdf2md = "pdf2md.cli:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "pdf2md.__version__" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+# Make the src/ layout importable without a sys.path-mutating conftest.py
+# (pytest >= 7 supports this).
+pythonpath = ["src"]
+
+[tool.coverage.run]
+# Coverage targets the installed `pdf2md` package only. Run with:
+#   pytest --cov=pdf2md --cov-report=term-missing   (requires pytest-cov)
+branch = true
+source = ["pdf2md"]
+
+[tool.coverage.report]
+# Documented quality gate: 85% line coverage required.
+fail_under = 85
+show_missing = true
