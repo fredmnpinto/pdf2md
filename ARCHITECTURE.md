@@ -22,7 +22,7 @@
 | `src/pdf2md/__main__.py` | Entry point for `python -m pdf2md`; calls `main()` and raises `SystemExit`. |
 | `src/pdf2md/cli.py` | CLI contract: argparse parsing, output-path derivation, input validation, error→stderr mapping, exit codes. |
 | `src/pdf2md/converter.py` | Thin wrapper over `pymupdf4llm.to_markdown()`; validates with `pymupdf.open` and raises typed conversion errors. |
-| `flake.nix` | Nix dev shell: Python environment with `pymupdf` 1.28.2 + `pymupdf4llm` 0.3.4 + `pytest` + `pip`/`setuptools`/`wheel`, plus a writable `.venv` editable install in the `shellHook`. |
+| `flake.nix` | Nix outputs: `packages.default` (a `buildPythonApplication` with `pymupdf` + `pymupdf4llm` runtime deps, `meta.mainProgram = "pdf2md"`, and a `PYMUPDF_SUGGEST_LAYOUT_ANALYZER=0` wrapper), `apps.default` (`${pdf2md}/bin/pdf2md`), and the dev shell (Python environment with `pymupdf` 1.28.2 + `pymupdf4llm` 0.3.4 + `pytest` + `pip`/`setuptools`/`wheel`, plus a writable `.venv` editable install in the `shellHook`). |
 | `pyproject.toml` | Build metadata, dependencies (`pymupdf>=1.28,<3`, `pymupdf4llm>=0.3,<3`), and the `pdf2md` console-script entry point. |
 | `conftest.py` | Shared pytest config (effectively empty; importability via `pythonpath = ["src"]` in `pyproject.toml`). |
 | `tests/test_cli.py` | Unit tests for name derivation, argparse behavior, exit codes, and happy/error paths. |
@@ -76,7 +76,13 @@ The package uses the **src layout** (`[tool.setuptools.packages.find] where = ["
   - **Rationale**: Reproducible environment with nixpkgs' `pymupdf` **1.28.2** and `pymupdf4llm` **0.3.4**, plus `pytest`, `pytest-cov`, and `pip`/`setuptools`/`wheel`; `nix develop` leaves the shell ready to run `pdf2md --version` and `pytest` immediately. Rather than overriding pymupdf to a 2.x version, the code targets the `pymupdf4llm.to_markdown()` API, which works with the 1.28.2 + 0.3.4 combination nixpkgs ships *and* with the PyPI 2.x shim. `pip`/`setuptools`/`wheel` are included explicitly so the editable install has a build backend available (a bare `withPackages` env omits them, making `pip install -e .` silently no-op), and `--no-build-isolation` reuses those already present in the env, avoiding a network fetch.
   - **Read-only-store workaround**: pip cannot install into the `python3.withPackages` environment (it lives in the read-only Nix store), so the `shellHook` creates `.venv` with `--system-site-packages` to inherit the Nix packages, recreates it when `home`/system-site-packages in `pyvenv.cfg` don't match the current interpreter, and installs with `pip install --no-build-isolation --no-deps -e .` (`--no-deps` keeps pip from trying to resolve/install `pymupdf`/`pymupdf4llm` into the store).
   - **stdout cleanliness**: `PYMUPDF_SUGGEST_LAYOUT_ANALYZER=0` is exported because `pymupdf4llm` 0.3.x prints a "consider pymupdf_layout" recommendation to stdout on import when `pymupdf_layout` is absent (as in nixpkgs); the tool reserves stdout for `--help`/`--version`. The 2.x shim does not emit it.
-  - **Trade-offs**: Requires Nix/flakes; a plain `pip install -e .` remains supported for non-Nix users (Python >= 3.11).
+  - **Trade-offs**: Requires Nix/flakes; pip/pipx/uv installs remain supported for non-Nix users (Python >= 3.11).
+
+- **Decision**: Publish the CLI through **`packages.default` + `apps.default`** so the flake doubles as a distribution channel.
+  - **Rationale**: `buildPythonApplication` produces a self-contained package whose `bin/pdf2md` wrapper carries the interpreter and runtime deps, so `nix profile install github:fredmnpinto/pdf2md` and `nix run github:fredmnpinto/pdf2md -- input.pdf` work without a checkout. `apps.default` points at `${pdf2md}/bin/pdf2md` for `nix run`; `meta.mainProgram = "pdf2md"` keeps the default binary unambiguous.
+  - **Build details**: `pyproject = true` with `setuptools` as the build system; runtime deps are listed explicitly (`pymupdf`, `pymupdf4llm`) so the Python runtime-dependency check sees every `Requires-Dist` satisfied; `doCheck = false` because the test suite runs in the dev shell/CI (it needs `pytest`, which is not a runtime dependency); `src = ./.` copies only the git-tracked tree, so `.venv/` and `__pycache__/` are excluded from the build.
+  - **stdout cleanliness**: `makeWrapperArgs = [ "--set" "PYMUPDF_SUGGEST_LAYOUT_ANALYZER" "0" ]` bakes the dev shell's suppression into the installed wrapper, so the `pymupdf4llm` 0.3.x import-time recommendation cannot pollute stdout outside `nix develop`.
+  - **Trade-offs**: Two dependency resolutions are supported — nixpkgs' `pymupdf` 1.28.2 + `pymupdf4llm` 0.3.4 for the Nix package, and PyPI's `pymupdf4llm` 2.x (which pulls `pymupdf` 2.x and `pymupdf_layout`) for pip/pipx/uv. The `pymupdf4llm.to_markdown()` call keeps a single code path across both.
 
 - **Decision**: **Exit-code contract** — `0` success, `1` runtime error, `2` argparse usage error.
   - **Rationale**: Composes cleanly with shell scripts and CI; argparse naturally raises `SystemExit(2)` on bad arguments.
@@ -117,6 +123,11 @@ options:
 - **Streams**: conversion output and the `Wrote <out>` / warning messages go to **stderr**; **stdout** carries only `--help`/`--version` text (reserved for a future `--stdout` flag).
 - **`--version`** prints `pdf2md <version>` (via argparse's `version` action) and exits `0`.
 
+### Distribution
+
+- **Nix**: `packages.default` builds a `buildPythonApplication` (`meta.mainProgram = "pdf2md"`) and `apps.default` exposes `${pdf2md}/bin/pdf2md`, enabling `nix profile install github:fredmnpinto/pdf2md` and `nix run github:fredmnpinto/pdf2md -- input.pdf` with no checkout. The installed wrapper sets `PYMUPDF_SUGGEST_LAYOUT_ANALYZER=0`.
+- **Python packaging**: `pyproject.toml` declares the `pdf2md` console script plus the `pymupdf>=1.28,<3` / `pymupdf4llm>=0.3,<3` dependencies, so `pipx install git+https://github.com/fredmnpinto/pdf2md.git`, `uv tool install git+https://github.com/fredmnpinto/pdf2md.git`, and `pip install --user git+https://github.com/fredmnpinto/pdf2md.git` all install the same CLI.
+
 ### External Integrations
 
 - **PyMuPDF + pymupdf4llm (`pymupdf>=1.28,<3`, `pymupdf4llm>=0.3,<3`)**: the runtime dependencies. `pymupdf.open(path)` is used (as a context manager) only to validate the file (`needs_pass`, `is_pdf`); the actual conversion is `pymupdf4llm.to_markdown(str(path))`. That `to_markdown()` API is the same in the standalone 0.3.x package (nixpkgs, with pymupdf 1.28.2) and the 2.x PyPI shim (with pymupdf 2.x), so no version-specific branching is needed. The path — not an open `Document` — is passed so that document ownership and closing stay inside `pymupdf4llm`.
@@ -153,7 +164,7 @@ Note: PyMuPDF opens some non-PDF files (e.g. plain text) and password-protected 
 - **Functional requirements live as GitHub issues** — each issue is a requirement with acceptance criteria.
 - Work flow: **issue → branch → PR**.
 - Reference issue IDs (e.g., `#123`) in commits and PRs.
-- Currently there is no repository/issue tracker yet, so requirements live self-contained in `.gt/spec.md`; each acceptance criterion should be migrated to an issue when the repo is created.
+- The repository is `github.com/fredmnpinto/pdf2md`. Working specs for in-flight changes live in `.gt/spec.md`; durable requirements belong in GitHub issues.
 - The `pdf2md` command line is the only stable contract; internal modules may change without notice.
 
 ---

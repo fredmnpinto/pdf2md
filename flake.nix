@@ -24,8 +24,52 @@
         # env omits them, which makes `pip install -e .` silently no-op).
         pythonEnv = pkgs.python3.withPackages
           (ps: [ ps.pymupdf ps.pymupdf4llm ps.pytest ps.pytest-cov ps.pip ps.setuptools ps.wheel ]);
+
+        # Globally installable / runnable package:
+        #   nix profile install github:fredmnpinto/pdf2md
+        #   nix run github:fredmnpinto/pdf2md -- input.pdf
+        #
+        # `src = ./.` in a flake copies the git-tracked tree only, so .venv/,
+        # __pycache__/ and other ignored paths are not part of the build.
+        # The version is single-sourced from src/pdf2md/__init__.py at build
+        # time by setuptools (`attr = "pdf2md.__version__"`); keep this copy in
+        # sync for `nix eval` / `nix search` output.
+        pdf2md = pkgs.python3Packages.buildPythonApplication {
+          pname = "pdf2md";
+          version = "0.1.0";
+          pyproject = true;
+          src = ./.;
+          build-system = [ pkgs.python3Packages.setuptools ];
+          # pymupdf is declared in pyproject.toml as well; list it explicitly so
+          # the runtime-deps check sees every Requires-Dist satisfied.
+          dependencies = [
+            pkgs.python3Packages.pymupdf
+            pkgs.python3Packages.pymupdf4llm
+          ];
+          doCheck = false; # tests run in the dev shell / CI
+          # Not a test: `pythonImportsCheckPhase` runs in distPhase, so it still
+          # fires with doCheck = false and proves the *installed* package (and
+          # its pymupdf/pymupdf4llm dependency chain) actually imports.
+          pythonImportsCheck = [ "pdf2md" "pdf2md.cli" ];
+          # The nixpkgs pymupdf4llm prints a "consider pymupdf_layout"
+          # recommendation to *stdout* on import. pdf2md keeps stdout unused
+          # (so a future --stdout flag won't break scripts), so silence it in
+          # the installed wrapper exactly as the dev shell does above.
+          makeWrapperArgs = [ "--set" "PYMUPDF_SUGGEST_LAYOUT_ANALYZER" "0" ];
+          meta = {
+            description = "Convert PDF files to Markdown via pymupdf4llm";
+            mainProgram = "pdf2md";
+          };
+        };
       in
       {
+        packages.default = pdf2md;
+        apps.default = {
+          type = "app";
+          program = "${pdf2md}/bin/pdf2md";
+          meta = { description = "Convert PDF files to Markdown"; };
+        };
+
         devShells.default = pkgs.mkShell {
           packages = [ pythonEnv ];
           shellHook = ''

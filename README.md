@@ -13,6 +13,7 @@ Convert PDF files to Markdown using the `pymupdf4llm.to_markdown()` converter bu
 - **Predictable exit codes** — `0` success, `1` runtime error, `2` usage error — for clean shell/CI scripting.
 - **Clear diagnostics** — conversion output and status/error messages go to stderr; stdout carries only `--help`/`--version` text (reserved for a future `--stdout` flag).
 - **Reproducible dev environment** — a Nix flake provides the Python environment and dependencies.
+- **Installable globally** — `nix profile install` / `nix run`, `pipx`, `uv tool`, or `pip --user` (see [Global installation](#global-installation)).
 
 ### Out of scope (v1)
 
@@ -23,9 +24,55 @@ Convert PDF files to Markdown using the `pymupdf4llm.to_markdown()` converter bu
 
 ## Installation
 
-The project installs as an editable package exposing the `pdf2md` console script.
+`pdf2md` installs as a Python package exposing the `pdf2md` console script. Use a **global install** to run the tool from anywhere, or a **development install** from a checkout to work on the code.
 
-### Via Nix (recommended)
+### Global installation
+
+The canonical source is [github.com/fredmnpinto/pdf2md](https://github.com/fredmnpinto/pdf2md). The pip/pipx/uv paths require Python **>= 3.11**; the Nix paths bring their own interpreter.
+
+#### Nix (recommended for Nix users)
+
+The flake exposes `packages.default` (a `buildPythonApplication`) and `apps.default`, so the CLI can be installed into your Nix profile or run without installing:
+
+```bash
+# Install into your Nix profile
+nix profile install github:fredmnpinto/pdf2md
+pdf2md input.pdf
+
+# Update later
+nix profile upgrade pdf2md
+
+# Or run once, without installing
+nix run github:fredmnpinto/pdf2md -- input.pdf
+```
+
+The Nix package builds `pdf2md` with nixpkgs' `pymupdf` **1.28.2** + `pymupdf4llm` **0.3.4** and wraps the binary with `PYMUPDF_SUGGEST_LAYOUT_ANALYZER=0`, so `pymupdf4llm` 0.3.x's import-time "consider pymupdf_layout" hint never pollutes stdout.
+
+#### pipx
+
+```bash
+pipx install git+https://github.com/fredmnpinto/pdf2md.git
+```
+
+#### uv
+
+```bash
+uv tool install git+https://github.com/fredmnpinto/pdf2md.git
+```
+
+#### pip (user install)
+
+```bash
+pip install --user git+https://github.com/fredmnpinto/pdf2md.git
+```
+
+> **Dependency note**: the pip/pipx/uv paths resolve `pymupdf4llm` **2.x** from PyPI, which pulls `pymupdf` **2.x** and `pymupdf_layout` — a heavier install than the Nix package. Both environments work with the same source because the code calls `pymupdf4llm.to_markdown()`, which the standalone 0.3.x package and the 2.x shim both export.
+
+### Development install
+
+The options below install from a local checkout with an editable install.
+
+#### Via Nix dev shell (recommended)
 
 ```bash
 nix develop
@@ -40,7 +87,7 @@ pdf2md --version
 
 The code calls `pymupdf4llm.to_markdown()`, an API that exists both in the standalone `pymupdf4llm` 0.3.x package (what nixpkgs ships, alongside pymupdf 1.28.2) and in the PyPI `pymupdf4llm` 2.x package (a shim that also exports `to_markdown()`), so the same source works in both environments. The shell also exports `PYMUPDF_SUGGEST_LAYOUT_ANALYZER=0` to suppress a stdout recommendation message printed by `pymupdf4llm` 0.3.x on import.
 
-### Via pip
+#### Via pip (editable)
 
 Requires Python **>= 3.11**.
 
@@ -150,7 +197,7 @@ Tests generate their PDF fixtures in-test using PyMuPDF (no binary fixtures are 
 
 ```
 pdf2md/
-├── flake.nix               # Nix dev shell (pymupdf + pymupdf4llm + pytest + pip/setuptools/wheel + writable .venv editable install)
+├── flake.nix               # Nix package + app (nix profile install / nix run) and dev shell (pymupdf + pymupdf4llm + pytest + pip/setuptools/wheel + writable .venv editable install)
 ├── pyproject.toml          # Metadata, deps, console-script entry point, pytest/coverage config
 ├── conftest.py             # Shared pytest config (empty; importability via pyproject pythonpath)
 ├── README.md
