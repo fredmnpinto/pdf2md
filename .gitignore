@@ -8,4 +8,5 @@ build/
 .venv/
 result
 .direnv/
+.envrc
 *.md.tmp
