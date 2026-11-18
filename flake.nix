@@ -10,14 +10,12 @@
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
-        # Note on the pymupdf version:
-        #   `Document.to_markdown()` (the merged-in `pymupdf4llm` converter) requires
-        #   pymupdf >= 2.0. nixpkgs/nixos-unstable packages pymupdf 2.x, so
-        #   `ps.pymupdf` satisfies this today. If a future/older revision ever pins
-        #   pymupdf < 2.0 (where `to_markdown` is absent), override it here — e.g.:
-        #     pymupdf = pkgs.python3.pkgs.pymupdf.overridePythonAttrs (old: { ... });
-        #   or add `pymupdf4llm` (>= 2.0) from PyPI. As of the nixos-unstable
-        #   revision in use, no pinning is required.
+        # Note on the pymupdf / pymupdf4llm versions:
+        #   nixpkgs/nixos-unstable currently packages pymupdf 1.28.2 (which has no
+        #   `Document.to_markdown()`; that method only exists in pymupdf >= 2.0)
+        #   together with pymupdf4llm 0.3.4. The code calls
+        #   `pymupdf4llm.to_markdown()`, which is stable across pymupdf4llm 0.3.x
+        #   and the 2.x PyPI shim, so no pymupdf override is needed.
         #
         #   Note: nixpkgs/flake-utils are pinned via `flake.lock` (generated with
         #   `nix flake lock`), so this shell is reproducible across CI/machines.
@@ -25,17 +23,47 @@
         # shellHook actually has a build backend available (a bare withPackages
         # env omits them, which makes `pip install -e .` silently no-op).
         pythonEnv = pkgs.python3.withPackages
-          (ps: [ ps.pymupdf ps.pytest ps.pytest-cov ps.pip ps.setuptools ps.wheel ]);
+          (ps: [ ps.pymupdf ps.pymupdf4llm ps.pytest ps.pytest-cov ps.pip ps.setuptools ps.wheel ]);
       in
       {
         devShells.default = pkgs.mkShell {
           packages = [ pythonEnv ];
           shellHook = ''
             # Editable install so the `pdf2md` console script resolves in the shell.
-            # --no-build-isolation reuses the setuptools/wheel already present in the
-            # withPackages env, so no network fetch of the build backend is needed.
+            #
+            # pip cannot install into the `python3.withPackages` env: that env lives
+            # in the read-only Nix store, so writing there fails with
+            #   OSError: [Errno 30] Read-only file system: .../site-packages/...
+            # Instead, use a writable project venv at .venv that inherits the Nix
+            # packages (pymupdf, pymupdf4llm, pytest, setuptools, ...) via
+            # --system-site-packages. Recreate .venv when it is missing, does not
+            # inherit the Nix packages, or was built from a different base
+            # interpreter (e.g. a stale hand-made venv, or one created before this
+            # flake's Nix env store path changed — the Python version can stay the
+            # same while the store path changes). Such a venv cannot see the
+            # Nix-provided pymupdf4llm/pytest.
+            if [ ! -d .venv ] \
+              || ! grep -Fq "include-system-site-packages = true" .venv/pyvenv.cfg 2>/dev/null \
+              || ! grep -Fqx "home = $(dirname "$(command -v python)")" .venv/pyvenv.cfg 2>/dev/null; then
+              rm -rf .venv
+              python -m venv --system-site-packages .venv
+            fi
+            source .venv/bin/activate
+
+            # pymupdf4llm 0.3.x prints a "consider pymupdf_layout" recommendation
+            # to *stdout* on import when pymupdf_layout is absent (as in nixpkgs).
+            # pdf2md keeps stdout unused, so opt out of that recommendation here —
+            # the PyPI 2.x shim does not emit it.
+            export PYMUPDF_SUGGEST_LAYOUT_ANALYZER=0
+
+            # --no-deps is intentional: the runtime dependency (pymupdf) and the build
+            # backend (setuptools/wheel) come from the withPackages env, so pip must
+            # only install the `pdf2md` package itself into the writable venv — never
+            # try to resolve/install pymupdf or its deps into the store.
+            # --no-build-isolation reuses the setuptools/wheel already present, so no
+            # network fetch of the build backend is needed.
             if [ -f pyproject.toml ]; then
-              pip install --no-build-isolation -e . --quiet \
+              pip install --no-build-isolation --no-deps -e . --quiet \
                 || echo "pdf2md: editable install failed (pip/setuptools issue)" >&2
             fi
           '';

@@ -1,100 +1,209 @@
 {
   "criticalCount": 0,
   "decision": "APPROVE",
+  "generatedAt": "2026-11-18",
   "summary": {
     "critical": 0,
-    "warnings": 3,
-    "suggestions": 9
+    "warnings": 2,
+    "suggestions": 17,
+    "resolved": 8
   },
   "critical": [],
   "warnings": [
     {
-      "category": "Env / Docs",
-      "file": "flake.nix",
-      "line": 29,
-      "issue": "`pytest-cov` is documented as provided by the flake dev shell (README.md:115,136; ARCHITECTURE.md:76) but is NOT included in `withPackages` (currently `[ ps.pymupdf ps.pytest ps.pip ps.setuptools ps.wheel ]`). `nix develop -c pytest --cov=pdf2md` (the documented coverage command) would fail with 'unrecognized arguments: --cov=pdf2md'. One-line fix: add `ps.pytest-cov` to withPackages. Non-critical: the core flake works (pymupdf + pytest + editable install all resolve) and the Must-Have test command (`pytest` plain) passes. Recorded for fast follow-up.",
-      "severity": "warning"
-    },
-    {
-      "category": "Security / Reproducibility",
-      "file": "flake.nix",
-      "line": 5,
-      "issue": "nixpkgs and flake-utils inputs are unpinned (`nixos-unstable`, no flake.lock). Non-critical for a dev shell but should run `nix flake lock` to pin before relying on this in CI or across machines (already noted in a flake.nix comment).",
-      "severity": "warning"
+      "category": "Spec / Documentation",
+      "file": ".gt/spec.md",
+      "line": 67,
+      "issue": "The spec and plan still describe the pre-migration design: spec.md:67 says the PDF-to-Markdown feature was merged into pymupdf and that the runtime dependency is pymupdf >= 2.x, spec.md:111 calls Document.to_markdown() the modern entry point, and plan.md:3-4/13/21/39 assume pymupdf >= 2 plus Document.to_markdown() (and omit pytest-cov). The implementation deliberately targets pymupdf4llm.to_markdown() so it works with nixpkgs' pymupdf 1.28.2 + pymupdf4llm 0.3.4. All 17 acceptance criteria are met, so this is non-blocking; per AGENTS.md, spec changes are 'Ask First', so the artifacts must not be rewritten by Developer/Documenter without human approval.",
+      "severity": "warning",
+      "blocking": false,
+      "action": "Human approval required to refresh .gt/spec.md/.gt/plan.md; do not edit in this pass."
     },
     {
       "category": "Security / Supply-chain",
       "file": "pyproject.toml",
       "line": 10,
-      "issue": "Runtime dependency `pymupdf>=2` is unpinned (no upper bound or lock). Consider pinning for reproducible installs.",
-      "severity": "warning"
+      "issue": "The allowed range `pymupdf4llm>=0.3,<3` admits the PyPI 2.x line, whose 2.1 release hard-pins `pymupdf==2.1` and `pymupdf_layout==2.1` (verified via the PyPI JSON API on 2026-11-18). The exact pin is reproducible, but it delays pymupdf CVE fixes: a patched pymupdf 2.2 cannot be installed alongside pymupdf4llm 2.1. The Nix dev shell is unaffected (pymupdf 1.28.2 + pymupdf4llm 0.3.4).",
+      "severity": "warning",
+      "blocking": false,
+      "action": "Document the trade-off, or constrain the range per environment (e.g. keep the 0.3.x line for nixpkgs and select 2.x explicitly)."
     }
   ],
   "suggestions": [
     {
-      "category": "Spec Compliance",
-      "file": "flake.nix",
-      "line": 39,
-      "issue": "Drop `--quiet` from the shellHook `pip install -e .` so pip errors are surfaced (currently only the `|| echo` fallback reports a generic failure)."
-    },
-    {
-      "category": "Spec Compliance / CI",
-      "file": "flake.nix",
-      "line": 38,
-      "issue": "The shellHook has no hard failure path; a failed editable install would go unnoticed in CI. Consider `set -e` / a non-zero exit on failure."
-    },
-    {
-      "category": "Security",
-      "file": "src/pdf2md/cli.py",
-      "line": null,
-      "issue": "TOCTOU: the `--output == input` check and the subsequent write are not atomic; a symlink/rename race is theoretically possible. Low risk for a local CLI."
-    },
-    {
-      "category": "Security",
-      "file": "src/pdf2md/converter.py",
-      "line": null,
-      "issue": "Parses untrusted PDFs with a native (C) parser (PyMuPDF). Inherent to the design; acceptable for v1 with no sandboxing."
-    },
-    {
-      "category": "Security",
-      "file": ".gitignore",
-      "line": null,
-      "issue": "No secret-scan patterns (e.g. `.env`, `*.pem`, `*.key`). Minor for a greenfield CLI."
-    },
-    {
-      "category": "Code Quality",
-      "file": "src/pdf2md/cli.py",
-      "line": null,
-      "issue": "Broad `except Exception` in the conversion/write error handling; consider narrowing to the expected exception types."
-    },
-    {
-      "category": "Code Quality",
-      "file": "tests/test_cli.py",
-      "line": null,
-      "issue": "Hardcoded `\"0.1.0\"` in a version test; consider reading `pdf2md.__version__` to avoid drift."
-    },
-    {
-      "category": "Code Quality",
-      "file": "src/pdf2md/__main__.py",
-      "line": null,
-      "issue": "Missing module docstring."
+      "category": "Docs",
+      "file": "README.md",
+      "line": 55,
+      "issue": "README has no CLI usage/help block, and the documented usage order in ARCHITECTURE.md:105 and .gt/spec.md:119 (`pdf2md [-h] [--version] [-o OUTPUT] input`) does not match argparse's declaration order in cli.py:46-57 (input, then -o, then --version), which renders as `pdf2md [-h] [-o OUTPUT] [--version] input`. Add a usage block to README and align the documented option order."
     },
     {
       "category": "Docs",
       "file": "README.md",
       "line": 14,
-      "issue": "Wording: README says 'conversion output goes to stderr' when Markdown is written to a file; only the status message goes to stderr. Minor phrasing fix."
+      "issue": "The phrase 'conversion output and status/error messages go to stderr' is misleading: the Markdown is written to the output file; only status/warning/error messages go to stderr. The same wording appears at ARCHITECTURE.md:117. Reword to 'status and error messages'."
+    },
+    {
+      "category": "Docs",
+      "file": "README.md",
+      "line": 94,
+      "issue": "The 'Common errors' block omits the conversion-time OSError path (`Error: could not convert PDF: <exc>`, cli.py:107-109), which is present in ARCHITECTURE.md's error table. Add the example for parity."
+    },
+    {
+      "category": "Docs",
+      "file": "README.md",
+      "line": 41,
+      "issue": "The cross-environment parity claim is stronger than verified: PyPI's pymupdf4llm 2.x is a shim that hard-pins pymupdf==2.1 and pymupdf_layout==2.1, so layout/heading/table behavior (and any OCR-adjacent layout analysis) may differ from nixpkgs' 0.3.4 even though both export to_markdown(). Also note that PYMUPDF_SUGGEST_LAYOUT_ANALYZER=0 only matters for the 0.3.x path. Qualify 'the same source works in both environments' as 'the same API entry point', not identical output."
+    },
+    {
+      "category": "Docs",
+      "file": "README.md",
+      "line": 151,
+      "issue": "The project-layout trees in README.md:151-168 and ARCHITECTURE.md:33-48 omit `flake.lock`, even though it is checked in and is what makes the flake inputs reproducible (referenced by flake.nix:20-21). Add it to both trees."
+    },
+    {
+      "category": "Docs",
+      "file": "ARCHITECTURE.md",
+      "line": 156,
+      "issue": "'Currently there is no repository/issue tracker yet' is stale: the project is now a git repository (with no remote/issues yet). Update the wording. The equivalent claim in .gt/spec.md:7 is covered by the spec-staleness warning and must not be edited without approval."
+    },
+    {
+      "category": "Docs / Tests",
+      "file": "src/pdf2md/cli.py",
+      "line": 18,
+      "issue": "derive_output_path's docstring says `.md` is appended 'when the remaining stem has no suffix', but the code always appends to Path.stem, so `a.tar.gz` becomes `a.tar.md` even though the stem still has a `.tar` suffix. ARCHITECTURE.md:70 documents the real behavior. Fix the clause and add a multi-suffix derivation test (`a.tar.gz` -> `a.tar.md`) to pin the intentional behavior."
+    },
+    {
+      "category": "Tests",
+      "file": "tests/test_cli.py",
+      "line": 170,
+      "issue": "The happy-path and empty-PDF tests assert stderr contains 'Wrote'/'no text' but never assert stdout is empty, so the documented 'stdout is reserved' contract (README.md:14, ARCHITECTURE.md:117) is unverified. Add `assert capsys.readouterr().out == ''` to the success tests."
+    },
+    {
+      "category": "Tests",
+      "file": "src/pdf2md/cli.py",
+      "line": 107,
+      "issue": "Two error branches have no tests: conversion-time OSError (cli.py:107-109 / converter.py:74-75) and empty-result write failure (cli.py:113-120). `test_main_write_failure` covers only the non-empty write path. Add monkeypatched tests to protect the 'could not convert/write' messages."
+    },
+    {
+      "category": "Tests",
+      "file": "src/pdf2md/__main__.py",
+      "line": 1,
+      "issue": "`python -m pdf2md` is documented (README.md:67-69) but never tested; tests call `main()` directly. Add a `runpy` or subprocess smoke test to cover __main__.py."
+    },
+    {
+      "category": "Tests",
+      "file": "tests/test_cli.py",
+      "line": 86,
+      "issue": "The version test hardcodes \"0.1.0\", which will drift; assert against `pdf2md.__version__` instead."
+    },
+    {
+      "category": "Security",
+      "file": "src/pdf2md/converter.py",
+      "line": 55,
+      "issue": "TOCTOU: the file is validated with pymupdf.open() and then reopened by pymupdf4llm.to_markdown(str(path)); a path swap between the two opens could convert a different file. Accepted for a local CLI and justified by pymupdf4llm owning/closing the Document (converter.py:45-53); keep as documented residual risk rather than adding racy workarounds."
+    },
+    {
+      "category": "Security",
+      "file": "flake.nix",
+      "line": 45,
+      "issue": "The shellHook sources `.venv/bin/activate` and runs `rm -rf .venv` relative to the current directory. Entering `nix develop` in an untrusted checkout executes that venv's activate script, and entering from another directory can target a `.venv` outside the repo. Consider scoping paths to `${toString ./.}` and documenting the trust assumption."
+    },
+    {
+      "category": "Security",
+      "file": "pyproject.toml",
+      "line": 10,
+      "issue": "`pymupdf4llm>=0.3,<3` spans a 0.x minor range; 0.x semver permits breaking behavior changes (layout heuristics, defaults) between 0.3 and 0.4. Consider `>=0.3.4,<0.4` for the nixpkgs path plus an explicit 2.x alternative, or document the tested versions."
+    },
+    {
+      "category": "Security",
+      "file": "src/pdf2md/cli.py",
+      "line": 128,
+      "issue": "`Path.write_text` follows a pre-existing symlink at the output path, so `-o link.md` can write outside the expected directory. Low risk for a local CLI; optionally use `os.open(..., O_NOFOLLOW)` or document that symlinked outputs are followed."
+    },
+    {
+      "category": "Code Quality",
+      "file": "src/pdf2md/cli.py",
+      "line": 112,
+      "issue": "The empty-result branch (113-125) and the normal branch (127-135) duplicate the same write_text + OSError -> message + return 1 sequence. A small `_write_output(path, text)` helper would remove the duplication; two real call sites make the extraction worthwhile."
+    },
+    {
+      "category": "Code Quality",
+      "file": "tests/test_cli.py",
+      "line": 1,
+      "issue": "Fixture helpers `_make_pdf`/`_make_empty_pdf` are duplicated between test_cli.py and test_converter.py. Move them to the already-present, effectively empty conftest.py so PDF-generation details live in one place."
+    }
+  ],
+  "resolved": [
+    {
+      "category": "Code Quality",
+      "file": "src/pdf2md/converter.py",
+      "line": 67,
+      "issue": "Broad `except Exception` relabeling `OSError` as NotAPdfError is fixed: validation (lines 67-68) and conversion (lines 74-75) re-raise `OSError` unchanged, so the CLI reports 'could not convert PDF' instead of 'not a valid PDF'."
+    },
+    {
+      "category": "Converter / Errors",
+      "file": "src/pdf2md/converter.py",
+      "line": 65,
+      "issue": "`pymupdf.FileNotFoundError` (a RuntimeError subclass) is now converted to the builtin `FileNotFoundError` (lines 65-66), so callers can rely on the standard exception; the user-facing path is covered by test_main_missing_file."
+    },
+    {
+      "category": "Docs",
+      "file": "pyproject.toml",
+      "line": 8,
+      "issue": "The project description now names the pymupdf4llm converter/PyMuPDF instead of implying the pymupdf-only Document API."
+    },
+    {
+      "category": "Env / Coverage",
+      "file": "flake.nix",
+      "line": 26,
+      "issue": "`ps.pytest-cov` is now in withPackages, so the documented `nix develop -c pytest --cov=pdf2md` works (previous warning resolved)."
+    },
+    {
+      "category": "Reproducibility",
+      "file": "flake.nix",
+      "line": 5,
+      "issue": "`flake.lock` is checked in, so nixpkgs/flake-utils inputs are pinned (previous 'unpinned inputs' warning resolved)."
+    },
+    {
+      "category": "Supply-chain",
+      "file": "pyproject.toml",
+      "line": 10,
+      "issue": "Runtime dependencies now have bounds (`pymupdf>=1.28,<3`, `pymupdf4llm>=0.3,<3`) instead of the previous unbounded `pymupdf>=2`."
+    },
+    {
+      "category": "Tests / Coverage",
+      "file": "pyproject.toml",
+      "line": 37,
+      "issue": "Coverage gate verified: 85.96% >= 85% (`fail_under = 85`), resolving the test reviewer's 'coverage not measured in this session' warning."
+    },
+    {
+      "category": "Docs",
+      "file": "src/pdf2md/cli.py",
+      "line": 17,
+      "issue": "`derive_output_path` now has a docstring; remaining wording precision is tracked as a suggestion."
     }
   ],
   "reviewers": {
-    "spec-compliance": "APPROVE",
-    "test-coverage": "APPROVE (warning: pytest-cov not in flake.nix)",
-    "security": "APPROVE (warnings/suggestions only)",
-    "code-quality": "APPROVE (suggestions only)",
-    "documentation": "APPROVE (warning: pytest-cov claim vs flake.nix)",
-    "agents-md": "APPROVE (no update needed)",
-    "scope-creep": "APPROVE (no creep)",
-    "frontend-design": "N/A (no frontend changes)"
+    "spec-compliance": "PASS - 17/17 acceptance criteria met; warning: spec/plan still describe the pre-migration API.",
+    "test-coverage": "PASS - 27 tests pass; coverage measured at 85.96% >= 85% gate.",
+    "security": "PASS - 0 critical; warning: PyPI pymupdf4llm 2.1 hard-pins pymupdf==2.1.",
+    "code-quality": "PASS - OSError relabeling fixed; suggestions only.",
+    "documentation": "PASS - README/ARCHITECTURE accurate to the new API; pyproject description fixed; spec staleness remains.",
+    "agents-md": "PASS - no AGENTS.md update needed for this migration.",
+    "scope-creep": "PASS - migration matches the required API change; no unrelated refactoring.",
+    "frontend-design": "N/A - no frontend changes."
   },
-  "decisionRationale": "The prior CRITICAL (flake.nix editable install silently failing due to missing pip/setuptools/wheel) is confirmed fixed: pip/setuptools/wheel are present in withPackages and the install has a working backend. All acceptance criteria are met, 27 tests pass, and the prior code-quality/doc warnings are resolved. The single remaining warning (pytest-cov not in flake.nix, while documented) is a non-critical, one-line doc/env consistency gap: the core flake works, `pytest` plain passes, and coverage measurement is a dev nicety not required by any Must-Have acceptance criterion. Per AGENTS.md bias-toward-approval (a warning in an otherwise clean review still APPROVEs; only critical issues force LOOP), this is APPROVE with the warning recorded for fast follow-up."
+  "verification": {
+    "tests": "nix develop -c pytest -q -> 27 passed",
+    "coverage": "nix develop -c pytest --cov=pdf2md --cov-report=term-missing -q -> 85.96% (fail_under=85 passes)",
+    "cliSmoke": "pdf2md --version -> 'pdf2md 0.1.0'; E2E conversion produced ~14KB Markdown with 9 headings and 0 bytes on stdout",
+    "corroboratedStatically": [
+      "27 test functions counted in tests/test_cli.py (20) and tests/test_converter.py (7)",
+      "converter.py separates validation open from conversion and re-raises OSError; maps pymupdf.FileNotFoundError to builtin FileNotFoundError",
+      "flake.nix withPackages includes pymupdf, pymupdf4llm, pytest, pytest-cov, pip, setuptools, wheel; venv home-check shellHook; PYMUPDF_SUGGEST_LAYOUT_ANALYZER=0",
+      "pyproject.toml declares pymupdf>=1.28,<3 and pymupdf4llm>=0.3,<3 with coverage fail_under=85",
+      "PyPI JSON API: pymupdf4llm 2.1 requires_dist = ['pymupdf==2.1', 'pymupdf_layout==2.1']"
+    ]
+  },
+  "decisionRationale": "APPROVE with criticalCount 0. The migration from Document.to_markdown() (pymupdf 2.x) to pymupdf4llm.to_markdown() is complete and verified: 27 tests pass, coverage is measured at 85.96% against the 85% gate, the CLI smoke test works, and the prior critical (editable install with no build backend) plus the OSError/FileNotFoundError, pyproject-description, pytest-cov, flake.lock, and dependency-bound issues are all resolved. Two non-blocking warnings remain: (1) .gt/spec.md/.gt/plan.md still describe the pre-migration API, which requires human approval to change and does not affect any acceptance criterion; (2) PyPI's pymupdf4llm 2.x hard-pins pymupdf==2.1, a documented supply-chain trade-off that does not affect the nixpkgs dev environment. The remaining 17 suggestions are quality/documentation refinements. Per AGENTS.md's bias toward approval, a clean review with non-blocking warnings is APPROVE; no LOOP is warranted."
 }

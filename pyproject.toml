@@ -5,9 +5,9 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "pdf2md"
 dynamic = ["version"]
-description = "Convert PDF files to Markdown via PyMuPDF's built-in converter"
-requires-python = ">=3.9"
-dependencies = ["pymupdf>=2,<3"]
+description = "Convert PDF files to Markdown via the pymupdf4llm converter (PyMuPDF)"
+requires-python = ">=3.11"
+dependencies = ["pymupdf>=1.28,<3", "pymupdf4llm>=0.3,<3"]
 
 [project.optional-dependencies]
 dev = ["pytest", "pytest-cov"]
