@@ -1,6 +1,6 @@
 # Architecture
 
-> **Date**: 2026-11-18 | **Status**: Current
+> **Date**: 2026-11-21 | **Status**: Current
 
 ---
 
@@ -25,16 +25,21 @@
 | `flake.nix` | Nix outputs: `packages.default` (a `buildPythonApplication` with `pymupdf` + `pymupdf4llm` runtime deps, `meta.mainProgram = "pdf2md"`, and a `PYMUPDF_SUGGEST_LAYOUT_ANALYZER=0` wrapper), `apps.default` (`${pdf2md}/bin/pdf2md`), and the dev shell (Python environment with `pymupdf` 1.28.2 + `pymupdf4llm` 0.3.4 + `pytest` + `pip`/`setuptools`/`wheel`, plus a writable `.venv` editable install in the `shellHook`). |
 | `pyproject.toml` | Build metadata, dependencies (`pymupdf>=1.28,<3`, `pymupdf4llm>=0.3,<3`), and the `pdf2md` console-script entry point. |
 | `conftest.py` | Shared pytest config (effectively empty; importability via `pythonpath = ["src"]` in `pyproject.toml`). |
-| `tests/test_cli.py` | Unit tests for name derivation, argparse behavior (including `--stdout` and the `-o \| --stdout` conflict), exit codes, and happy/error paths in file and stdout modes. |
+| `tests/test_cli.py` | Unit tests for name derivation, argparse behavior (including `--stdout` and the `-o \| --stdout` conflict), exit codes, and happy/error paths in file and stdout modes. `test_main_version_exits_0` asserts that `pdf2md.__version__` appears in the `--version` output instead of a hard-coded literal, so the suite stays green across release bumps. |
 | `tests/test_converter.py` | Unit tests for the converter (fixture PDFs generated in-test via PyMuPDF). |
+| `Makefile` | Developer entry points for **GNU make**. `help` is the default goal; `release` dispatches to the bash script `scripts/release.sh`. Owns GNU make's positional-goal mechanics: `MAKECMDGOALS` handling, a `.PHONY` no-op rule for the version token (so `make release 1.0.0` does not fail with `No rule to make target`), parse-time rejection of extra/conflicting/unsafe goals, command-line-only `VERSION` resolution (`$(origin VERSION)`), and no `%:` catch-all so unknown targets still fail. |
+| `scripts/release.sh` | Bash script (`set -euo pipefail`) that owns the release flow: version and `DRY_RUN` validation (only a command-line `VERSION` is honored; an explicitly empty `DRY_RUN=` is a usage error, only an unset value defaults to `0`), `read_current_versions` (exactly one `__version__` assignment, exactly one literal `version = "...";` line, values must match, target must differ from the current version), dry-run command-plan printing, the 14-check preflight (git/gh/python installed; inside a git repository; canonical `origin` fetch URL and every push URL, with credential redaction; clean tree; `main`; git identity; `gh auth status`; `git fetch origin main`; `HEAD == origin/main`; local tag absent; remote tag absent; GitHub Release absent via pinned `gh release view --repo fredmnpinto/pdf2md`), `python -m pytest --cov=pdf2md` (85% coverage gate), `PREFLIGHT_HEAD` re-verification, exactly-one rewrite of `src/pdf2md/__init__.py` and `flake.nix`, `git commit --only` of exactly those two files (`chore: release v<version>`), annotated tag, atomic push of `main` + tag, and pinned `gh release create --repo fredmnpinto/pdf2md --generate-notes`. An `EXIT` trap restores the version files before the commit and prints stage-specific recovery commands (tag, push, release) after it. |
 
 ### Package layout (src layout)
 
 ```
 pdf2md/
+├── Makefile
 ├── flake.nix
 ├── pyproject.toml
 ├── conftest.py
+├── scripts/
+│   └── release.sh
 ├── src/
 │   └── pdf2md/
 │       ├── __init__.py
@@ -92,6 +97,36 @@ The package uses the **src layout** (`[tool.setuptools.packages.find] where = ["
 - **Decision**: **Exit-code contract** — `0` success, `1` runtime error, `2` argparse usage error (including `--stdout` combined with `-o/--output`).
   - **Rationale**: Composes cleanly with shell scripts and CI; argparse naturally raises `SystemExit(2)` on bad arguments.
 
+- **Decision**: **Local release automation** — a thin **GNU make** `Makefile` dispatching to a **bash** `scripts/release.sh`.
+  - **Rationale**: One command (`make release 1.0.0`) runs validation, preflight, tests, the version bump, commit/tag/push, and the GitHub Release. That logic is too large and error-prone for inline make recipes (shell state, cleanup traps, stage-specific recovery), so `scripts/release.sh` with `set -euo pipefail` is the canonical owner; the Makefile owns only GNU make's positional-goal mechanics and `help`. There is no CI release workflow: the maintainer's machine is the release environment, and `gh` already provides release creation and generated notes.
+  - **Trade-offs**: Requires GNU make, bash, `git`, and an authenticated `gh` on the host, and direct pushes to `main` must be allowed. No `%:` catch-all is added, so typos still fail instead of being swallowed.
+
+- **Decision**: Tag format **`vX.Y.Z`** (e.g. `v1.0.0`).
+  - **Rationale**: Conventional, sortable, and directly usable as an install ref (`@v1.0.0` for pip/pipx, `/v1.0.0` for Nix). Input accepts an optional lowercase leading `v` and normalizes it to exactly one tag form. The version regex is semver-like: three numeric segments without leading zeros plus optional `-prerelease`/`+build` identifiers. `--prerelease` is added only when a `-` appears before any `+build` metadata, so `1.0.0-rc.1+build-2` is a prerelease but `1.0.0+build-2` is not.
+  - **Trade-offs**: Not full SemVer (numeric prerelease identifiers are not strictly validated), and monotonic ordering is not enforced — only an exact repeat of the current version and existing tags/releases are rejected.
+
+- **Decision**: **Synchronize the version** in `src/pdf2md/__init__.py` and `flake.nix`, with `__init__.py` canonical.
+  - **Rationale**: `pyproject.toml` reads `version = { attr = "pdf2md.__version__" }`, so `__init__.py` is the source of truth; `flake.nix` duplicates the literal for `nix eval`/`nix search` output. `read_current_versions` (run before preflight, distinct from the 14 preflight checks) requires exactly one `__version__` assignment and exactly one literal `version = "...";` line, requires them to match, and rejects a target equal to the current version (`version is already <version>; nothing to release`), so drift or a no-op bump aborts before any preflight, test, or mutation. The release script rewrites both with one stdlib-Python block (no `sed -i` portability issues) and verifies the new values. A Nix-side parser of the Python file (`builtins.readFile` + `builtins.match`) was considered and rejected: it is more fragile and less readable than the existing literal for marginal benefit.
+  - **Trade-offs**: Two files must be updated on every release (the script does it). The flake line must remain a standalone literal `version = "...";` — a trailing comment intentionally fails the exactly-one check.
+
+- **Decision**: **Tests before tag** — `python -m pytest --cov=pdf2md` runs after preflight and before any version edit.
+  - **Rationale**: A broken build is never published, and the 85% gate comes from `[tool.coverage.report] fail_under = 85` in `pyproject.toml`. Because the test run precedes mutation, a failure leaves the tree untouched; `.coverage` is gitignored so the next release's clean-tree preflight still passes. The suite is version-agnostic: `test_main_version_exits_0` asserts that `pdf2md.__version__` appears in the output instead of a literal, so the release commit's bump does not turn the suite red.
+
+- **Decision**: **Atomic push** of the release commit and tag (`git push --atomic origin main v<version>`).
+  - **Rationale**: The remote never ends up with `main` without the tag or the tag without the commit. A failed push leaves both local and prints the exact commands to finish the release; branch protection that blocks direct pushes fails safely.
+
+- **Decision**: **`gh` CLI as a host tool**, not a Nix dev-shell dependency, with every call pinned to the canonical repository.
+  - **Rationale**: `gh auth status` is a preflight check (fail before the slow tests), `gh release view --repo fredmnpinto/pdf2md` guards duplicate releases, and `gh release create --repo fredmnpinto/pdf2md --title v<version> --generate-notes --verify-tag` creates the release with GitHub-generated notes — no changelog tooling. Pinning every `gh` call (preflight, release, and recovery commands) means a multi-remote checkout or a different `gh` default cannot target the wrong repository. Preflight likewise validates the `origin` fetch URL and **every** `origin` push URL against `github.com/fredmnpinto/pdf2md`, and redacts URL userinfo (`https://***@github.com/...`) before printing, so a fork/mirror or an embedded credential cannot be used or leaked. It is deliberately not added to the Nix dev shell because it needs host authentication and is a maintainer-only prerequisite.
+  - **Trade-offs**: `gh` must be installed and authenticated outside Nix. The `gh release view` duplicate check is best-effort (network errors are treated as "not found"); the remote-tag check is the primary duplicate guard.
+
+- **Decision**: **Dry-run is a command-plan printer**, not a rehearsal.
+  - **Rationale**: `DRY_RUN=1` validates the version, the current version files, their consistency, and that the target differs from the current version, then prints the preflight list and the exact version edits and commands (tag, `git commit --only`, atomic push, pinned `gh release create --repo fredmnpinto/pdf2md`) without running preflight, tests, or mutations. Skipping preflight/tests is intentional so the plan can be inspected from a feature branch or dirty worktree; a real run always performs preflight before any mutation, so preflight failures are safe to reproduce separately.
+  - **Trade-offs**: The dry-run cannot catch a stale `main`, missing auth, or a test failure — it only proves the version/edit/command plan.
+
+- **Decision**: **Harden release inputs and the release commit** — command-line-only `VERSION`, strict `DRY_RUN`, and a TOCTOU guard.
+  - **Rationale**: Only a command-line `VERSION` is honored (`$(origin VERSION)` must be `command line`); an exported environment `VERSION` is ignored and never expanded, so an ambient value cannot select the release version. Only an **unset** `DRY_RUN` defaults to `0`; an explicitly empty `DRY_RUN=` is a usage error (exit `2`), so a missing value cannot silently publish. `PREFLIGHT_HEAD` is captured after `HEAD == origin/main` passes and re-verified after the tests and immediately before the commit; the release commit uses `git commit --only` over exactly the two version-file paths, so a moved `HEAD` or an unrelated staged file cannot enter the release.
+  - **Trade-offs**: A direct-script invocation must pass the version as an argument or via `PDF2MD_RELEASE_VERSION`; `make release` remains the supported interface.
+
 - **Decision**: **No public importable API** (v1).
   - **Rationale**: Stability guarantees apply only to the `pdf2md` command line. The internal functions (`convert_to_markdown`, `derive_output_path`, `main`) are implementation details.
 
@@ -136,6 +171,25 @@ options:
 - **Nix**: `packages.default` builds a `buildPythonApplication` (`meta.mainProgram = "pdf2md"`) and `apps.default` exposes `${pdf2md}/bin/pdf2md`, enabling `nix profile install github:fredmnpinto/pdf2md` and `nix run github:fredmnpinto/pdf2md -- input.pdf` with no checkout. The installed wrapper sets `PYMUPDF_SUGGEST_LAYOUT_ANALYZER=0` (the CLI also defaults it in code before importing the converter).
 - **Python packaging**: `pyproject.toml` declares the `pdf2md` console script plus the `pymupdf>=1.28,<3` / `pymupdf4llm>=0.3,<3` dependencies, so `pipx install git+https://github.com/fredmnpinto/pdf2md.git`, `uv tool install git+https://github.com/fredmnpinto/pdf2md.git`, and `pip install --user git+https://github.com/fredmnpinto/pdf2md.git` all install the same CLI.
 
+### Release interface
+
+Release tooling is a thin **GNU make** dispatcher (`Makefile`) plus a **bash** script (`scripts/release.sh`, `set -euo pipefail`).
+
+```bash
+make release <version> [DRY_RUN=1]
+make release VERSION=<version> [DRY_RUN=1]
+```
+
+- `<version>`: `MAJOR.MINOR.PATCH` with optional `-prerelease` and `+build` suffixes; an optional leading `v` is accepted and stripped. The tag is always `v<version>`. A `-suffix` before any `+build` metadata adds `--prerelease` to the GitHub Release; build metadata alone does not.
+- `DRY_RUN=1`: prints the planned preflight, test run, version edits, and commands; performs no preflight, tests, or mutations, and exits `0`. Values other than `0`/`1` are a usage error; only an **unset** `DRY_RUN` defaults to `0`, so an explicitly empty `DRY_RUN=` exits `2` instead of publishing.
+- **Exit codes**: `0` success (including dry-run) · `1` preflight, test/coverage, or mutation failure · `2` usage/version error or make parse-time error (missing/invalid version, multiple or conflicting goals, invalid `DRY_RUN`). GNU make reports its own exit `2` when the `release` recipe fails, even when the script exits `1`; use the script's message, not make's status, to distinguish preflight/test failures from usage errors.
+- **Version files first**: before preflight, `read_current_versions` requires exactly one `__version__` assignment in `src/pdf2md/__init__.py`, exactly one literal `version = "...";` line in `flake.nix`, matching values, and a target different from the current version.
+- **Preflight (14 checks, in order, before tests and mutation)**: `git`, `gh`, and `python` installed; inside a git repository; the `origin` fetch URL and **every** `origin` push URL are `github.com/fredmnpinto/pdf2md` (credentials redacted in errors); clean tree including untracked files; on `main`; `user.name`/`user.email` configured; `gh auth status`; `git fetch origin main`; `HEAD == origin/main`; local tag absent; remote tag absent; GitHub Release absent via pinned `gh release view --repo fredmnpinto/pdf2md`.
+- **Preconditions**: canonical `origin` (fetch URL and every push URL), clean tree on `main` equal to `origin/main`, configured `user.name`/`user.email`, authenticated `gh`, and no existing local tag, remote tag, or GitHub Release for `v<version>`.
+- **Side effects on success**: `__version__` in `src/pdf2md/__init__.py` and `version = "...";` in `flake.nix` rewritten, one commit (`chore: release v<version>`) made with `git commit --only` over exactly those two paths after a `PREFLIGHT_HEAD` re-check, one annotated tag (`v<version>`, message `pdf2md v<version>`), one atomic push of `main` + tag, one GitHub Release with generated notes (every `gh` call pinned with `--repo fredmnpinto/pdf2md`).
+- **Positional-goal mechanism**: `make release 1.0.0` yields `MAKECMDGOALS = release 1.0.0`. The Makefile extracts the second goal with `$(word 2,$(MAKECMDGOALS))`, rejects tokens that would shadow `release` or make special targets or create a pattern rule, generates a `.PHONY` no-op rule for that exact token, and passes the version to the script through `PDF2MD_RELEASE_VERSION` in the environment (never shell interpolation). `VERSION=` is the alternative form, honored **only** when it comes from the command line (`$(origin VERSION)` == `command line`); an exported environment `VERSION` is ignored and never expanded, and a conflicting positional/`VERSION` pair is rejected at parse time. There is no `%:` catch-all, so unknown targets still fail.
+- **Recovery**: a failure after the bump but before the commit restores both version files (`git restore --source=HEAD --staged --worktree`). A failure after the commit restores nothing and prints the exact commands to finish: after a tag failure, `git tag -a ...`, `git push --atomic ...`, and the pinned `gh release create ...`; after a push failure, `git push --atomic ...` and the pinned release command; after a GitHub Release failure, the pinned `gh release create ... --repo fredmnpinto/pdf2md`. Re-running `make release` is unnecessary and stops at the existing tag.
+
 ### External Integrations
 
 - **PyMuPDF + pymupdf4llm (`pymupdf>=1.28,<3`, `pymupdf4llm>=0.3,<3`)**: the runtime dependencies. `pymupdf.open(path)` is used (as a context manager) only to validate the file (`needs_pass`, `is_pdf`); the actual conversion is `pymupdf4llm.to_markdown(str(path))`. That `to_markdown()` API is the same in the standalone 0.3.x package (nixpkgs, with pymupdf 1.28.2) and the 2.x PyPI shim (with pymupdf 2.x), so no version-specific branching is needed. The path — not an open `Document` — is passed so that document ownership and closing stay inside `pymupdf4llm`.
@@ -173,6 +227,7 @@ Note: PyMuPDF opens some non-PDF files (e.g. plain text) and password-protected 
 
 - **Functional requirements live as GitHub issues** — each issue is a requirement with acceptance criteria.
 - Work flow: **issue → branch → PR**.
+- **Releases are the exception**: release commits are made directly on `main` by the **GNU make** `make release <version>` target, which dispatches to the **bash** `scripts/release.sh` (no branch or PR) and also creates the annotated tag and publishes the GitHub Release; see the release interface above.
 - Reference issue IDs (e.g., `#123`) in commits and PRs.
 - The repository is `github.com/fredmnpinto/pdf2md`. Working specs for in-flight changes live in `.gt/spec.md`; durable requirements belong in GitHub issues.
 - The `pdf2md` command line is the only stable contract; internal modules may change without notice.

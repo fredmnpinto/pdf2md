@@ -62,6 +62,46 @@ pytest --cov=pdf2md # 85% coverage gate
 
 Without Nix (Python >= 3.11): `pip install -e '.[dev]'`
 
+## Releasing
+
+Releases are cut locally from a clean `main`; there is no CI release workflow.
+
+Prerequisites:
+
+- **GNU make** and **bash** on `PATH` (the script uses `set -euo pipefail` and bash-only constructs), plus `git`.
+- An authenticated [`gh`](https://cli.github.com/) on `PATH`. `gh` is a host tool and is not added to the Nix dev shell, so install it separately and run `gh auth login` once.
+- `main` checked out, clean, and equal to `origin/main` (the script fetches and verifies this).
+- Python/pytest from `nix develop` (or an equivalent dev environment: `pip install -e '.[dev]'`).
+
+```bash
+make release 1.0.0           # publish: bump, commit, tag, push, GitHub Release
+make release VERSION=1.0.0   # equivalent make-variable form
+make release 1.0.0 DRY_RUN=1 # print the plan; change nothing
+```
+
+`make release` without `DRY_RUN=1` is the publishing command. The tag is always `v<version>`; a leading `v` is accepted and stripped. A `-prerelease` suffix before any `+build` metadata adds `--prerelease` to the GitHub Release; build metadata alone does not (`1.0.0-rc.1` is a prerelease, `1.0.0+build.1` is not).
+
+Before preflight, `read_current_versions` requires exactly one `__version__` line in `src/pdf2md/__init__.py`, exactly one literal `version = "...";` line in `flake.nix`, and identical values (`version mismatch: ...; synchronize them first`); the target version must also differ from the current one (`version is already <version>; nothing to release`).
+
+The 14 preflight checks then run in order, before tests and before any mutation: (1) `git` installed, (2) `gh` installed, (3) `python` installed, (4) inside a git repository, (5) the `origin` fetch URL and **every** `origin` push URL point to `github.com/fredmnpinto/pdf2md` (credentials redacted as `https://***@github.com/...`), (6) clean tree including untracked files, (7) on `main`, (8) `user.name`/`user.email` configured, (9) `gh auth status` succeeds, (10) `git fetch origin main` succeeds, (11) `HEAD == origin/main`, (12) local tag absent, (13) remote tag absent, (14) GitHub Release absent (pinned `gh release view --repo fredmnpinto/pdf2md`).
+
+It then runs `python -m pytest --cov=pdf2md` (the 85% gate), re-verifies `HEAD` and the clean tree, rewrites the two version files, commits only those files (`git commit --only -m "chore: release v<version>" -- src/pdf2md/__init__.py flake.nix`), creates the annotated tag, pushes `main` + tag atomically, and runs `gh release create v<version> --repo fredmnpinto/pdf2md --title v<version> --generate-notes --verify-tag`.
+
+It does not run CI, build or upload dists/assets, publish to PyPI, maintain a changelog, choose a version, sign tags, or open a PR — the release commit goes directly to `main`.
+
+`VERSION=` is honored only as a command-line make variable; an exported environment `VERSION` is ignored. Only an unset `DRY_RUN` defaults to `0`; an explicitly empty `DRY_RUN=` is an error (exit `2`).
+
+If a step after the version bump fails before the commit, the script restores both version files. If tag creation, the atomic push, or the GitHub Release fails, the commit/tag state is kept and the script prints the exact `git tag`, `git push --atomic`, and/or `gh release create ... --repo fredmnpinto/pdf2md` commands to finish; re-running `make release` is unnecessary and stops at the existing tag. GNU make reports exit code `2` when the release recipe fails even when the script itself exits `1` (preflight, test, or mutation failure); the script's usage/version errors are `2`.
+
+Pin installs to a release tag:
+
+```bash
+pipx install git+https://github.com/fredmnpinto/pdf2md.git@v1.0.0
+uv tool install git+https://github.com/fredmnpinto/pdf2md.git@v1.0.0
+pip install --user git+https://github.com/fredmnpinto/pdf2md.git@v1.0.0
+nix profile install github:fredmnpinto/pdf2md/v1.0.0
+```
+
 ## Limitations
 
 - No OCR: scanned or image-only PDFs without a text layer produce an empty output file plus a stderr warning (with `--stdout`: nothing on stdout, warning on stderr); exit `0` in both cases.
