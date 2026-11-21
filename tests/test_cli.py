@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Frederico Pinto
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """Test the pdf2md CLI: name derivation, argparse, and error/happy paths."""
 
 import importlib

@@ -74,4 +74,10 @@ Without Nix (Python >= 3.11): `pip install -e '.[dev]'`
 
 ## License
 
-No license chosen yet.
+`pdf2md` is licensed under the [GNU Affero General Public License v3.0 or later](https://www.gnu.org/licenses/agpl-3.0.html) (`AGPL-3.0-or-later`). See [LICENSE](LICENSE) for the full text.
+
+Copyright (C) 2026 Frederico Pinto
+
+This program is free software: you can redistribute it and/or modify it under the terms of the GNU Affero General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version. This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU Affero General Public License for more details.
+
+`pdf2md` depends on [PyMuPDF](https://pymupdf.io/) and PyMuPDF4LLM, which are dual-licensed under AGPLv3 or a commercial license from [Artifex Software](https://artifex.com/licensing). If you redistribute `pdf2md` as part of a proprietary product, review those terms or obtain a commercial PyMuPDF license.

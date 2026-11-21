@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Frederico Pinto
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """Thin wrapper over the ``pymupdf4llm`` PDF-to-Markdown converter."""
 
 from __future__ import annotations

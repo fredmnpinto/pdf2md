@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2026 Frederico Pinto
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
 """Command-line interface for pdf2md."""
 
 from __future__ import annotations
