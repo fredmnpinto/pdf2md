@@ -1,70 +1,56 @@
-# pdf2md — Developer Task Plan
+# `--stdout` Flag — Developer Task Plan
 
-Converts a PDF into Markdown via PyMuPDF's built-in `Document.to_markdown()`
-(the merged-in `pymupdf4llm` converter). CLI: `pdf2md [-h] [--version] [-o OUTPUT] input`.
-Exit codes: `0` success · `1` runtime error · `2` argparse usage error. Errors → stderr; success message → stderr; stdout unused.
-
-No GitHub issue IDs yet (no repo); requirements live in `.gt/spec.md`.
+**Requirement source:** `.gt/spec.md`. The repository has no GitHub issues, so no issue IDs apply.
+**Canonical owner:** `src/pdf2md/cli.py` — extend `build_parser()` and `main()`. No new modules, files, helpers, or dependencies.
+**Prohibited changes:** `src/pdf2md/converter.py`, `src/pdf2md/__main__.py`, `pyproject.toml`, `flake.nix`, `tests/test_converter.py`; existing default/`-o` messages, exit codes, and `derive_output_path` semantics.
 
 ## Task List
 
-### 1. Project scaffolding
+### 1. Argument parser
 
-- [X] T001 - Create `pyproject.toml` with `[project]` metadata (name `pdf2md`, `version` single-sourced from `src/pdf2md/__init__.py`, `requires-python`), `[project.optional-dependencies] dev = ["pytest"]`, dependency `pymupdf>=2`, and `[project.scripts] pdf2md = "pdf2md.cli:main"`. Include build-system (setuptools) and setuptools package discovery for the `src` layout.
-- [X] T002 - Create `src/pdf2md/__init__.py` defining `__version__` (semver string, e.g. `"0.1.0"`).
-- [X] T003 - Create `src/pdf2md/__main__.py` that imports `main` from `pdf2md.cli` and does `raise SystemExit(main())` so `python -m pdf2md` works.
-- [X] T004 - Create `.gitignore` (ignore `__pycache__/`, `*.pyc`, `.pytest_cache/`, `dist/`, `build/`, `*.egg-info/`, `.venv/`, `result`, `.direnv/`, and any `.md` test output artifacts).
-- [X] T005 - Create `tests/` directory with an empty `tests/__init__.py` (or confirm `pytest` discovers without it) and a `conftest.py` (optional; only if shared fixtures are needed).
+- [X] T001 - Replace the standalone `-o/--output` argument with one mutually exclusive group in `src/pdf2md/cli.py#build_parser`: `group.add_argument("-o", "--output", metavar="OUTPUT", help="Output Markdown path (default: <input-stem>.md)")` and `group.add_argument("--stdout", action="store_true", help="Write Markdown to stdout instead of a file")`. Keep `input` and `--version` outside the group. Confirm `--help` renders usage `pdf2md [-h] [--version] [-o OUTPUT | --stdout] input` and lists both options; add no custom post-parse check.
 
-### 2. Converter
+### 2. `main()` control flow
 
-- [X] T006 - Implement `src/pdf2md/converter.py`: a single `convert_to_markdown(path: str | Path) -> str` that opens the PDF with `pymupdf.open(path)` (as a context manager) and returns `doc.to_markdown()`. Do NOT pass `write_images`/`embed_images`. Let open/conversion exceptions propagate to the CLI (no catching here). Keep it a thin wrapper.
+- [X] T002 - Skip output-path work in stdout mode in `src/pdf2md/cli.py#main`: compute `output_path` via `derive_output_path()` and run the `_same_path(input, output)` guard only when `not args.stdout`; keep the input existence and directory checks unconditional and in their current order; run the output-parent existence check only when `not args.stdout`, so `output_path` is never referenced in stdout mode. Leave default and `-o` order, messages, and exit codes byte-identical; do not change `derive_output_path`.
+- [X] T003 - Add the non-empty stdout success branch in `src/pdf2md/cli.py#main`: when `args.stdout` and `markdown` is non-empty, call `sys.stdout.write(markdown)` exactly once (never `print`, which adds a trailing newline), return `0`, emit nothing on stderr, and write no file.
+- [X] T004 - Add the empty-result stdout branch in `src/pdf2md/cli.py#main`: when `args.stdout` and `markdown == ""`, write nothing to stdout, print exactly `Warning: no text found in PDF; nothing written to stdout` to stderr, return `0`, and create no file. Leave the existing default/`-o` empty-file warning branch unchanged.
+- [X] T005 - Handle stdout write failures in `src/pdf2md/cli.py#main`: wrap the `sys.stdout.write(markdown)` call in `try/except OSError` (covers `BrokenPipeError` from `| head`), print `Error: could not write to stdout: <exc>` to stderr, and return `1` instead of letting a traceback escape.
 
-### 3. CLI
+### 3. Tests
 
-- [X] T007 - Implement `derive_output_path(input, output) -> Path` in `src/pdf2md/cli.py` as a pure function: if `output` is given, return `Path(output)`; otherwise derive `<input-stem>.md` next to the input — strip a trailing `.pdf`/`.PDF`, and if the remaining stem has no suffix, append `.md`.
-- [X] T008 - Implement `build_parser()` in `src/pdf2md/cli.py` using stdlib `argparse`: positional `input`, `-o/--output OUTPUT`, `--version` (prints `__version__` via `argparse`'s `version` action, exits 0), `-h/--help` (free via argparse, exits 0). Match the documented usage string.
-- [X] T009 - Implement `main(argv: list[str] | None = None) -> int` in `src/pdf2md/cli.py`:
-  - Parse args (argparse raises `SystemExit(2)` on bad args — no args → usage to stderr, exit 2).
-  - Validate input: reject `--output` equal to the input path (would overwrite source) → error to stderr, return `1`.
-  - Reject non-file input (missing file / directory) → clear error to stderr, return `1`.
-  - Call `convert_to_markdown`; catch conversion errors (non-PDF, corrupt, password-protected) and map to specific stderr messages: "not a valid PDF", "password-protected PDF is not supported yet", etc. → return `1`.
-  - Handle empty result (0-page PDF): write an empty `.md`, print a warning to stderr, return `0`.
-  - Handle `--output` whose parent directory does not exist: do NOT auto-create; report error to stderr, return `1`.
-  - On success write the Markdown to the output path and print `Wrote <out>` to stderr; return `0`. Never write to stdout.
+- [X] T006 - Add `test_main_stdout_happy_path` in `tests/test_cli.py`: build a PDF with `_make_pdf`; `main([str(pdf), "--stdout"])` → rc `0`, captured stdout contains `"Hello world"`, `captured.err == ""`, and `not (tmp_path / "doc.md").exists()`. For exact-bytes parity, run an equivalent `main([str(pdf), "-o", str(tmp_path / "ref.md")])` and assert the captured stdout equals `(tmp_path / "ref.md").read_text(encoding="utf-8")` (read captures between the two calls).
+- [X] T007 - Add `test_main_stdout_empty_pdf` in `tests/test_cli.py`: build a blank-page PDF with `_make_empty_pdf`; `main([str(pdf), "--stdout"])` → rc `0`, `captured.out == ""`, `"no text" in captured.err.lower()` plus the `nothing written to stdout` warning text, and `not (tmp_path / "empty.md").exists()`.
+- [X] T008 - Add `test_main_stdout_with_output_rejected` in `tests/test_cli.py`: parametrize both orders (`["--stdout", "-o", out]` and `["-o", out, "--stdout"]`); `pytest.raises(SystemExit)` with `.code == 2`; `"not allowed with argument" in captured.err`; no output file created. Include a missing-input case to prove the parse-time usage error wins over input validation.
+- [X] T009 - Add `test_main_stdout_input_validation` in `tests/test_cli.py` (parametrized or separate tests) covering missing file, directory, non-PDF, and password-protected input under `--stdout`: rc `1`, `captured.out == ""`, the same stderr fragments as the existing tests (`not found`, `directory`, `not a valid PDF`, `password-protected`), and no `.md` file created.
+- [X] T010 - Add `test_main_help_lists_stdout` in `tests/test_cli.py`: `main(["--help"])` raises `SystemExit(0)`; `captured.out` contains `--stdout` and `[-o OUTPUT | --stdout]`.
+- [X] T011 - Add `test_main_stdout_write_failure` in `tests/test_cli.py`: for a non-empty PDF with `--stdout`, monkeypatch `sys.stdout.write` (or replace `sys.stdout` with a stub whose `write` raises `BrokenPipeError`/`OSError`); assert rc `1`, `"could not write to stdout" in captured.err`, and no traceback escapes; rely on `monkeypatch` for restoration.
 
-### 4. Nix environment
+### 4. Documentation handoff (Documenter — after the Developer's green run; not runtime code)
 
-- [X] T010 - Create `flake.nix` providing `devShells.default` = `mkShell` with a `python3.withPackages` environment including `ps.pymupdf` and `ps.pytest`. Use `flake-utils.lib.eachDefaultSystem`. In the `shellHook`, perform an editable install (`pip install -e .`) so `pdf2md --version` resolves in the shell.
-- [X] T011 - Verify/pin the `pymupdf` version in the chosen nixpkgs revision: confirm it is ≥2.x (so `Document.to_markdown()` exists). If the packaged version is older, pin a newer `pymupdf` (or add `pymupdf4llm` from PyPI) and note the decision in a comment in `flake.nix`.
+- [X] T012 - Update `README.md#features` and related sections for `--stdout`: replace the "reserved for a future `--stdout` flag" stream note with the new contract (stdout carries Markdown under `--stdout`, otherwise help/version only); remove `--stdout` from "Out of scope (v1)"; add usage examples `pdf2md input.pdf --stdout`, `pdf2md input.pdf --stdout > out.md`, and `pdf2md input.pdf --stdout | head`; state that no `.md` is written and no `Wrote ...` message appears; update Exit codes (`2` also covers `--stdout` with `-o/--output`; `0` empty-PDF stdout case), Output-name derivation (skipped in stdout mode), Common errors (mutual-exclusion usage error and `Error: could not write to stdout: ...`), and Known limitations (empty/textless PDF with `--stdout` produces no stdout).
+- [X] T013 - Update `ARCHITECTURE.md`: §1 Overview scope/target state (`--stdout` supported; remove it from the "no ... flags" and deferred-capability lists); §3 stream decision (stdout = Markdown under `--stdout`) plus a decision bullet for the mutually exclusive `-o | --stdout` group (rationale: prevents ambiguous intent; argparse supplies exit `2`); §4 Data Models add `stdout` (`bool`, not required, "write Markdown to stdout; mutually exclusive with `output`"); §5 usage block, streams/exit-code bullets, `--stdout` description, Error Handling table (output-only checks skipped in stdout mode; stdout write failure), and empty-result paragraph (stdout warning variant); reword the flake stdout-cleanliness rationale to include `--stdout` output. Do not change `flake.nix`.
 
-### 5. Tests
+### 5. Final verification (Developer — last developer step)
 
-- [X] T012 - Write `tests/test_converter.py` using PyMuPDF to generate fixture PDFs in-test (no binary fixtures):
-  - Happy path: build a PDF with a larger-font heading, a paragraph, and a table; assert `convert_to_markdown` output contains an ATX `#` heading, the paragraph text, and a Markdown table (or readable table text).
-  - Multi-page: text from page 1 and page 2 both present, in page order.
-  - Empty PDF (0 pages): returns an empty string.
-  - Errors: non-PDF input and password-protected PDF raise (so the CLI maps them to exit 1).
-- [X] T013 - Write `tests/test_cli.py`:
-  - `derive_output_path`: default `a.pdf`→`a.md`, uppercase `a.PDF`→`a.md`, extension-less `a`→`a.md`, explicit `-o out.txt` passthrough, and `input == output` rejection.
-  - argparse: no arguments → exit code `2` (usage to stderr); `--version` → exit `0`; `--help` → exit `0`.
-  - `main()` error paths: missing file → exit `1` (stderr message, no output file created); directory input → exit `1`; non-PDF input → exit `1`; password-protected PDF → exit `1`; `--output` equal to input → non-zero exit.
-  - `main()` happy path end-to-end: convert an in-test fixture PDF and assert the `.md` file is created with expected content, success message on stderr, and exit `0`.
+- [X] T014 - Run the full suite as the FINAL developer step: `pytest` from the project root (or `nix develop -c pytest`), then `pytest --cov=pdf2md --cov-report=term-missing` if `pytest-cov` is available, confirming the 85% gate. Smoke-test `python -m pdf2md <fixture>.pdf --stdout` and `pdf2md --help`. Confirm `git diff --stat` shows only `src/pdf2md/cli.py`, `tests/test_cli.py`, `README.md`, and `ARCHITECTURE.md` changed (prohibited files untouched) and no new dependencies were added.
 
-### 6. Final verification
+### 6. Review loop fixes (Coordinator LOOP)
 
-- [X] T014 - Run `pytest` from the project root as the FINAL step; confirm the full suite passes (satisfies the `green` gate). Optionally run `nix develop -c pytest` and `nix develop -c pdf2md --version` as a smoke test.
+- [X] T015 - Prevent import-time stdout contamination in `src/pdf2md/cli.py`: add `import os` and `os.environ.setdefault("PYMUPDF_SUGGEST_LAYOUT_ANALYZER", "0")` immediately before `from pdf2md.converter import (...)`, with a comment; an explicit wrapper/user value wins.
+- [X] T016 - Complete buffered broken-pipe handling in `src/pdf2md/cli.py#main`: flush inside the try, catch `(OSError, ValueError)`, redirect fd 1 to `os.devnull` (closing the devnull fd in a `finally`, tolerating `OSError`/`ValueError`), then print the unchanged `Error: could not write to stdout: <exc>` and return `1`.
+- [X] T017 - Add tests in `tests/test_cli.py`: flush-failure regression (stub whose write succeeds and flush raises `BrokenPipeError`; rc `1`, documented message, no `Exception ignored`), skip-derivation proof (monkeypatched `derive_output_path`/`_same_path` raise; rc `0`, Markdown on stdout), exact empty-PDF warning, and env-default behavior (unset -> `"0"`, preset `"1"` unchanged).
 
 ## Dependencies
 
-- T002 must complete before T001 (version single-sourcing).
-- T001–T004 (scaffolding) must complete before T006–T009 (implementation imports the package).
-- T006 must complete before T009 (CLI depends on `convert_to_markdown`).
-- T007 must complete before T009 (CLI uses `derive_output_path`).
-- T009 must complete before T013 (CLI behavior tests exercise `main`).
-- T006 must complete before T012 (converter tests exercise `convert_to_markdown`).
-- T001 (entry point `pdf2md`) and T010 (flake shell) must complete before T014 smoke tests.
-- T010 must complete before T011 (version pinning refines the flake).
+- T001 before T002–T005 (`args.stdout` must exist).
+- T002 before T003 and T004 (stdout branches build on the mode split).
+- T003 before T005 (failure handling wraps the stdout write).
+- T001–T005 before T006–T011 (tests exercise the implemented behavior).
+- T003 before T006 (happy path); T004 before T007 (empty PDF); T001 before T008 and T010 (parse/help); T002 before T009 (validation in stdout mode); T005 before T011 (write failure).
+- T001–T005 before T012–T013 (docs describe the final behavior).
+- T006–T011 before T014 (green suite requires the new tests).
+- T012–T013 are Documenter tasks executed after T014 is green; they do not gate T014 and must not be performed by the Developer.
 
 ## Effort Estimate
 
@@ -78,7 +64,7 @@ No GitHub issue IDs yet (no repo); requirements live in `.gt/spec.md`.
 - T008: [Small]
 - T009: [Medium]
 - T010: [Small]
-- T011: [Medium]
+- T011: [Small]
 - T012: [Medium]
 - T013: [Medium]
 - T014: [Small]

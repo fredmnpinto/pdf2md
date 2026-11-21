@@ -3,10 +3,17 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
 from pdf2md import __version__
+
+# pymupdf4llm 0.3.x prints a layout recommendation to stdout on import unless
+# this is set. Default it before importing the converter so pip/pipx/uv installs
+# and venv runs outside `nix develop` keep stdout clean; an explicit value wins.
+os.environ.setdefault("PYMUPDF_SUGGEST_LAYOUT_ANALYZER", "0")
+
 from pdf2md.converter import (
     NotAPdfError,
     PasswordProtectedError,
@@ -45,15 +52,21 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("input", help="Path to the input PDF file")
     parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {__version__}",
+    )
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument(
         "-o",
         "--output",
         metavar="OUTPUT",
         help="Output Markdown path (default: <input-stem>.md)",
     )
-    parser.add_argument(
-        "--version",
-        action="version",
-        version=f"%(prog)s {__version__}",
+    group.add_argument(
+        "--stdout",
+        action="store_true",
+        help="Write Markdown to stdout instead of a file",
     )
     return parser
 
@@ -64,15 +77,18 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     input_path = Path(args.input)
-    output_path = derive_output_path(args.input, args.output)
 
-    # Reject --output equal to the input (would overwrite the source).
-    if _same_path(input_path, output_path):
-        print(
-            f"Error: output path must differ from the input PDF: {output_path}",
-            file=sys.stderr,
-        )
-        return 1
+    # In stdout mode no output path is derived and no output-file checks run.
+    if not args.stdout:
+        output_path = derive_output_path(args.input, args.output)
+
+        # Reject --output equal to the input (would overwrite the source).
+        if _same_path(input_path, output_path):
+            print(
+                f"Error: output path must differ from the input PDF: {output_path}",
+                file=sys.stderr,
+            )
+            return 1
 
     # Reject non-file input (missing or a directory).
     if not input_path.exists():
@@ -86,12 +102,13 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     # Reject --output with a missing parent directory (we do not auto-create).
-    if not output_path.parent.exists():
-        print(
-            f"Error: output directory does not exist: {output_path.parent}",
-            file=sys.stderr,
-        )
-        return 1
+    if not args.stdout:
+        if not output_path.parent.exists():
+            print(
+                f"Error: output directory does not exist: {output_path.parent}",
+                file=sys.stderr,
+            )
+            return 1
 
     try:
         markdown = convert_to_markdown(str(input_path))
@@ -108,8 +125,15 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Error: could not convert PDF: {exc}", file=sys.stderr)
         return 1
 
-    # Empty result (e.g. a 0-page PDF): write an empty file with a warning.
+    # Empty result (e.g. a 0-page PDF): stdout mode writes nothing to stdout;
+    # the default/-o mode writes an empty file with a warning.
     if not markdown:
+        if args.stdout:
+            print(
+                "Warning: no text found in PDF; nothing written to stdout",
+                file=sys.stderr,
+            )
+            return 0
         try:
             output_path.write_text("", encoding="utf-8")
         except OSError as exc:
@@ -122,6 +146,27 @@ def main(argv: list[str] | None = None) -> int:
             f"Warning: no text found in PDF; wrote empty file: {output_path}",
             file=sys.stderr,
         )
+        return 0
+
+    if args.stdout:
+        try:
+            sys.stdout.write(markdown)
+            # Force buffered data out here: with block-buffered stdout (a pipe),
+            # the write can succeed into the buffer and fail only at shutdown.
+            sys.stdout.flush()
+        except (OSError, ValueError) as exc:  # BrokenPipeError, closed stdout
+            # Python flushes stdout on exit; point fd 1 at devnull so the shutdown
+            # flush cannot raise a second BrokenPipeError (which exits 120).
+            try:
+                devnull = os.open(os.devnull, os.O_WRONLY)
+                try:
+                    os.dup2(devnull, sys.stdout.fileno())
+                finally:
+                    os.close(devnull)
+            except (OSError, ValueError):
+                pass
+            print(f"Error: could not write to stdout: {exc}", file=sys.stderr)
+            return 1
         return 0
 
     try:

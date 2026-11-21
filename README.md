@@ -10,8 +10,9 @@ Convert PDF files to Markdown using the `pymupdf4llm.to_markdown()` converter bu
 - **Structured Markdown** — headings become ATX headings (`#`, `##`, …), paragraphs become plain text, and tables become Markdown tables (or readable text when a table can't be reliably parsed).
 - **Multi-page support** — text from every page is concatenated in page order.
 - **Choose the destination** — `-o/--output` writes to an exact path.
+- **Pipe-friendly output** — `--stdout` writes the Markdown to stdout instead of a file, so it composes with redirection (`> out.md`) and pipes (`| head`); no `.md` file is created.
 - **Predictable exit codes** — `0` success, `1` runtime error, `2` usage error — for clean shell/CI scripting.
-- **Clear diagnostics** — conversion output and status/error messages go to stderr; stdout carries only `--help`/`--version` text (reserved for a future `--stdout` flag).
+- **Clear diagnostics** — status/error messages go to stderr; stdout carries the Markdown when `--stdout` is used and otherwise only `--help`/`--version` text.
 - **Reproducible dev environment** — a Nix flake provides the Python environment and dependencies.
 - **Installable globally** — `nix profile install` / `nix run`, `pipx`, `uv tool`, or `pip --user` (see [Global installation](#global-installation)).
 
@@ -19,7 +20,7 @@ Convert PDF files to Markdown using the `pymupdf4llm.to_markdown()` converter bu
 
 - No image extraction or embedding (images are left disabled).
 - No OCR for scanned/image-only PDFs (image-only pages produce empty output).
-- No `--password`, `--pages`, or `--stdout` flags.
+- No `--password` or `--pages` flags.
 - No stable importable Python API — only the `pdf2md` command line is a supported contract.
 
 ## Installation
@@ -46,7 +47,7 @@ nix profile upgrade pdf2md
 nix run github:fredmnpinto/pdf2md -- input.pdf
 ```
 
-The Nix package builds `pdf2md` with nixpkgs' `pymupdf` **1.28.2** + `pymupdf4llm` **0.3.4** and wraps the binary with `PYMUPDF_SUGGEST_LAYOUT_ANALYZER=0`, so `pymupdf4llm` 0.3.x's import-time "consider pymupdf_layout" hint never pollutes stdout.
+The Nix package builds `pdf2md` with nixpkgs' `pymupdf` **1.28.2** + `pymupdf4llm` **0.3.4** and wraps the binary with `PYMUPDF_SUGGEST_LAYOUT_ANALYZER=0`. The CLI also defaults the same variable to `0` in code (`os.environ.setdefault`) before importing the converter, so `pymupdf4llm` 0.3.x's import-time "consider pymupdf_layout" hint stays off stdout regardless of install method — pip/pipx/uv installs and plain `.venv` runs outside `nix develop` included. The wrapper is a second layer, and an explicit value (including the wrapper's) still wins.
 
 #### pipx
 
@@ -85,7 +86,7 @@ pdf2md --version
 # pdf2md 0.1.0
 ```
 
-The code calls `pymupdf4llm.to_markdown()`, an API that exists both in the standalone `pymupdf4llm` 0.3.x package (what nixpkgs ships, alongside pymupdf 1.28.2) and in the PyPI `pymupdf4llm` 2.x package (a shim that also exports `to_markdown()`), so the same source works in both environments. The shell also exports `PYMUPDF_SUGGEST_LAYOUT_ANALYZER=0` to suppress a stdout recommendation message printed by `pymupdf4llm` 0.3.x on import.
+The code calls `pymupdf4llm.to_markdown()`, an API that exists both in the standalone `pymupdf4llm` 0.3.x package (what nixpkgs ships, alongside pymupdf 1.28.2) and in the PyPI `pymupdf4llm` 2.x package (a shim that also exports `to_markdown()`), so the same source works in both environments. The shell also exports `PYMUPDF_SUGGEST_LAYOUT_ANALYZER=0` to suppress a stdout recommendation message printed by `pymupdf4llm` 0.3.x on import. This export is a second layer: `cli.py` defaults the same variable to `0` before importing the converter, so the hint is suppressed even when `pdf2md` is run from a plain `.venv` or a pip/pipx/uv install outside `nix develop`; an explicit value still wins.
 
 #### Via pip (editable)
 
@@ -107,6 +108,11 @@ pdf2md input.pdf
 pdf2md input.pdf -o docs/out.md
 pdf2md input.pdf --output docs/out.md
 
+# Write the Markdown to stdout instead of a file
+pdf2md input.pdf --stdout
+pdf2md input.pdf --stdout > out.md
+pdf2md input.pdf --stdout | head
+
 # Show version / help
 pdf2md --version
 pdf2md --help
@@ -122,19 +128,22 @@ On success, a one-line confirmation is printed to stderr:
 Wrote input.md
 ```
 
+In `--stdout` mode no `.md` file is written and no `Wrote ...` message is printed: stdout receives exactly the Markdown that would have been written to the file (no added trailing newline, no banner), and stderr is empty on success. `--stdout` and `-o/--output` are mutually exclusive — passing both is a usage error (exit `2`).
+
 ### Exit codes
 
 | Code | Meaning |
 |------|---------|
-| `0`  | Success (including the empty-PDF case, which writes an empty file with a warning) |
-| `1`  | Runtime error (missing file, directory input, non-PDF, password-protected, write failure, `--output` equals input, missing output directory) |
-| `2`  | Argument-usage error (e.g. no arguments) |
+| `0`  | Success (including the empty-PDF case: an empty file with a warning, or with `--stdout`, a warning on stderr and no stdout output) |
+| `1`  | Runtime error (missing file, directory input, non-PDF, password-protected, write failure, `--output` equals input, missing output directory, stdout write/flush failure) |
+| `2`  | Argument-usage error (e.g. no arguments, or `--stdout` combined with `-o/--output`) |
 
 ### Output-name derivation
 
 - No `--output`: the input's trailing extension is stripped and `.md` is appended, producing `<input-stem>.md` next to the input. `a.pdf` → `a.md`, `a.PDF` → `a.md`, `a.txt` → `a.md`, extension-less `a` → `a.md`.
 - Explicit `--output`: the exact path given is used verbatim (any extension is respected).
 - `--output` equal to the input path is rejected to avoid overwriting the source.
+- With `--stdout`: derivation is skipped entirely — no output path is computed, and the output-directory and input==output checks do not run.
 
 ### Common errors
 
@@ -146,9 +155,18 @@ Error: password-protected PDF is not supported yet
 Error: output path must differ from the input PDF: in.pdf
 Error: output directory does not exist: nodir
 Error: could not write output file out.md: [Errno 13] Permission denied: 'out.md'
+Error: could not write to stdout: [Errno 32] Broken pipe
 ```
 
-All errors are printed to stderr and exit `1` (write failures are caught and reported as `could not write output file`, not an unhandled traceback).
+Runtime errors are printed to stderr and exit `1` (write failures are caught and reported as `could not write output file` / `could not write to stdout`, not an unhandled traceback). The stdout write is flushed inside that handler, so a buffered pipe whose reader exits early — `pdf2md big.pdf --stdout | head -n 1` — also produces the `could not write to stdout` message and exit `1`, rather than exit `120` and an `Exception ignored ... BrokenPipeError` notice at interpreter shutdown.
+
+Passing both output destinations is a usage error caught by argparse — exit `2`, with the usage line and the conflict on stderr (the message names whichever option came second):
+
+```
+$ pdf2md input.pdf --stdout -o out.md
+usage: pdf2md [-h] [--version] [-o OUTPUT | --stdout] input
+pdf2md: error: argument -o/--output: not allowed with argument --stdout
+```
 
 ## Development
 
@@ -169,7 +187,7 @@ The flake's dev shell (`flake.nix`) provides:
 - `pip`, `setuptools`, and `wheel` so the editable install has a build backend available.
 - A writable `.venv` (created with `--system-site-packages`, recreated when its `home` or system-site-packages setting doesn't match the current interpreter) because the Nix store is read-only and pip cannot install into `python3.withPackages`.
 - An editable install (`pip install --no-build-isolation --no-deps -e .`) into that `.venv` via `shellHook`, so the `pdf2md` command and `python -m pdf2md` both work immediately. `--no-deps` is intentional: `pymupdf`/`pymupdf4llm` come from the Nix environment, so pip installs only the `pdf2md` package itself.
-- `PYMUPDF_SUGGEST_LAYOUT_ANALYZER=0` exported in the `shellHook`, suppressing a "consider pymupdf_layout" message that `pymupdf4llm` 0.3.x prints to stdout on import (which would otherwise pollute the tool's clean stdout).
+- `PYMUPDF_SUGGEST_LAYOUT_ANALYZER=0` exported in the `shellHook`, suppressing a "consider pymupdf_layout" message that `pymupdf4llm` 0.3.x prints to stdout on import (which would otherwise pollute the tool's clean stdout). This is a second layer: `cli.py` also defaults the variable to `0` before importing the converter, so the hint stays off stdout in a plain `.venv` or a pip/pipx/uv install too; an explicit value (including this export) still wins.
 
 ### Running tests
 
@@ -191,7 +209,7 @@ nix develop -c pytest
 nix develop -c pytest --cov=pdf2md
 ```
 
-Tests generate their PDF fixtures in-test using PyMuPDF (no binary fixtures are checked in), covering output-name derivation, the happy path (heading/paragraph/table), multi-page ordering, empty PDFs, and the error paths.
+Tests generate their PDF fixtures in-test using PyMuPDF (no binary fixtures are checked in), covering output-name derivation, the happy path (heading/paragraph/table), multi-page ordering, empty PDFs, stdout mode, and the error paths.
 
 ## Project layout
 
@@ -206,7 +224,7 @@ pdf2md/
 │   └── pdf2md/
 │       ├── __init__.py     # __version__ (single-sourced into pyproject.toml)
 │       ├── __main__.py     # enables `python -m pdf2md`
-│       ├── cli.py          # argparse, output-path derivation, exit codes, error → stderr
+│       ├── cli.py          # argparse, output-path derivation, file/stdout output, exit codes, error → stderr
 │       └── converter.py    # thin wrapper over pymupdf4llm.to_markdown()
 └── tests/
     ├── __init__.py         # empty marker (makes tests a package)
@@ -216,7 +234,7 @@ pdf2md/
 
 ## Known limitations
 
-- Scanned or image-only PDFs with no text layer produce an empty (blank) Markdown file (OCR is out of scope for v1).
+- Scanned or image-only PDFs with no text layer produce an empty (blank) Markdown file — or, with `--stdout`, no stdout output at all and a warning on stderr (OCR is out of scope for v1).
 - Password-protected PDFs cannot be opened (no `--password` flag in v1).
 - Output directories are not auto-created; the parent directory must already exist.
 

@@ -8,9 +8,9 @@
 
 **Purpose**: `pdf2md` converts a PDF file into a Markdown document. It is a thin, dependency-light wrapper around the `pymupdf4llm` PDF→Markdown converter (which runs on PyMuPDF), so the project adds only CLI ergonomics (argument parsing, output-path derivation, exit codes, diagnostics) on top of a mature conversion engine.
 
-**Scope**: A single command, `pdf2md input.pdf`, that writes `input.md` (or an explicit `-o` destination). Structured output (ATX headings, paragraphs, Markdown tables), multi-page ordering, and clear error handling. No images, no OCR, no page-range/password/stdout flags, and no stable public Python API.
+**Scope**: A single command, `pdf2md input.pdf`, that writes `input.md` (or an explicit `-o` destination), or streams the Markdown to stdout with `--stdout`. Structured output (ATX headings, paragraphs, Markdown tables), multi-page ordering, and clear error handling. No images, no OCR, no page-range/password flags, and no stable public Python API.
 
-**Target State**: v1 is a stable, scriptable CLI. Deferred capabilities (`--stdout`, `--pages`, `--password`, image extraction, OCR, batch conversion) are candidates for v2 but are not designed into the current structure.
+**Target State**: v1 is a stable, scriptable CLI. `--stdout` is supported for pipeline and redirection use. Deferred capabilities (`--pages`, `--password`, image extraction, OCR, batch conversion) are candidates for v2 but are not designed into the current structure.
 
 ---
 
@@ -20,12 +20,12 @@
 |-----------|-----------------|
 | `src/pdf2md/__init__.py` | Declares the package and `__version__` (single source of truth, read by `pyproject.toml`). |
 | `src/pdf2md/__main__.py` | Entry point for `python -m pdf2md`; calls `main()` and raises `SystemExit`. |
-| `src/pdf2md/cli.py` | CLI contract: argparse parsing, output-path derivation, input validation, error→stderr mapping, exit codes. |
+| `src/pdf2md/cli.py` | CLI contract: argparse parsing (mutually exclusive `-o/--output \| --stdout`), output-path derivation, input validation, file/stdout output (including buffered broken-pipe handling), error→stderr mapping, exit codes. Defaults `PYMUPDF_SUGGEST_LAYOUT_ANALYZER=0` before importing the converter so `pymupdf4llm` 0.3.x's import-time hint stays off stdout. |
 | `src/pdf2md/converter.py` | Thin wrapper over `pymupdf4llm.to_markdown()`; validates with `pymupdf.open` and raises typed conversion errors. |
 | `flake.nix` | Nix outputs: `packages.default` (a `buildPythonApplication` with `pymupdf` + `pymupdf4llm` runtime deps, `meta.mainProgram = "pdf2md"`, and a `PYMUPDF_SUGGEST_LAYOUT_ANALYZER=0` wrapper), `apps.default` (`${pdf2md}/bin/pdf2md`), and the dev shell (Python environment with `pymupdf` 1.28.2 + `pymupdf4llm` 0.3.4 + `pytest` + `pip`/`setuptools`/`wheel`, plus a writable `.venv` editable install in the `shellHook`). |
 | `pyproject.toml` | Build metadata, dependencies (`pymupdf>=1.28,<3`, `pymupdf4llm>=0.3,<3`), and the `pdf2md` console-script entry point. |
 | `conftest.py` | Shared pytest config (effectively empty; importability via `pythonpath = ["src"]` in `pyproject.toml`). |
-| `tests/test_cli.py` | Unit tests for name derivation, argparse behavior, exit codes, and happy/error paths. |
+| `tests/test_cli.py` | Unit tests for name derivation, argparse behavior (including `--stdout` and the `-o \| --stdout` conflict), exit codes, and happy/error paths in file and stdout modes. |
 | `tests/test_converter.py` | Unit tests for the converter (fixture PDFs generated in-test via PyMuPDF). |
 
 ### Package layout (src layout)
@@ -62,29 +62,34 @@ The package uses the **src layout** (`[tool.setuptools.packages.find] where = ["
   - **Trade-offs**: Two modules must agree on exception names (`NotAPdfError`, `PasswordProtectedError`), a small implicit interface.
 
 - **Decision**: Use the standard-library **`argparse`** rather than `click`/`typer`.
-  - **Rationale**: One positional argument and two flags don't justify a third-party CLI framework; argparse provides `--help`, `--version`, usage output, and exit code `2` for free, keeping the runtime dependency surface to just `pymupdf` + `pymupdf4llm`.
+  - **Rationale**: One positional argument and three options (`--version`, `-o/--output`, `--stdout`) don't justify a third-party CLI framework; argparse provides `--help`, `--version`, usage output, mutually exclusive groups, and exit code `2` for free, keeping the runtime dependency surface to just `pymupdf` + `pymupdf4llm`.
   - **Trade-offs**: Less "batteries-included" output styling; fine for a script-oriented tool.
 
 - **Decision**: Make **output-path derivation a pure function** (`derive_output_path(input, output)`).
   - **Rationale**: The naming rules are independently unit-testable without invoking the full CLI.
   - **Trade-offs**: The derivation uses `Path.stem`, which strips *any* trailing extension (not just `.pdf`/`.PDF`), so `a.txt` → `a.md`. This is intentional: it guarantees the default output name can never collide with the input path (which would trip the input==output guard).
 
-- **Decision**: Route **all diagnostics to stderr** and reserve **stdout** (aside from argparse's conventional `--help`/`--version` text).
-  - **Rationale**: Predictability in shell pipelines and CI; leaves room for a future `--stdout` flag without a breaking change.
+- **Decision**: Route **all diagnostics to stderr**; **stdout** carries the Markdown only when `--stdout` is used, and otherwise only argparse's conventional `--help`/`--version` text.
+  - **Rationale**: Predictability in shell pipelines and CI: `pdf2md in.pdf --stdout > out.md` and `pdf2md in.pdf --stdout | head` are safe because warnings/errors never interleave with the document. The same discipline keeps `pymupdf4llm` 0.3.x's import-time hint off stdout: `cli.py` calls `os.environ.setdefault("PYMUPDF_SUGGEST_LAYOUT_ANALYZER", "0")` before importing `pdf2md.converter`, so pip/pipx/uv installs and plain `.venv` runs are covered, while the Nix wrapper/dev shell sets the same variable explicitly as a second layer (see the flake decisions below). `setdefault` means an explicit value still wins.
+  - **Trade-offs**: Success is silent in `--stdout` mode (no `Wrote ...` confirmation), since a status line on stdout would corrupt the document; diagnostics stay on stderr. A failed stdout write or flush (including a buffered broken pipe) is reported on stderr and exits `1` instead of surfacing as a traceback at interpreter shutdown.
+
+- **Decision**: Make `-o/--output` and `--stdout` a single **mutually exclusive** argparse group.
+  - **Rationale**: Both name the output sink, so accepting both would require an arbitrary precedence rule and could silently ignore `-o`. argparse rejects the combination at parse time with exit code `2` and a `not allowed with argument` message, before input validation or conversion; no custom post-parse check is needed.
+  - **Trade-offs**: Slightly stricter than a "`--stdout` wins" rule; users must choose one destination explicitly.
 
 - **Decision**: **Nix flake** for the development environment, with an editable install into a writable `.venv` in the `shellHook`.
   - **Rationale**: Reproducible environment with nixpkgs' `pymupdf` **1.28.2** and `pymupdf4llm` **0.3.4**, plus `pytest`, `pytest-cov`, and `pip`/`setuptools`/`wheel`; `nix develop` leaves the shell ready to run `pdf2md --version` and `pytest` immediately. Rather than overriding pymupdf to a 2.x version, the code targets the `pymupdf4llm.to_markdown()` API, which works with the 1.28.2 + 0.3.4 combination nixpkgs ships *and* with the PyPI 2.x shim. `pip`/`setuptools`/`wheel` are included explicitly so the editable install has a build backend available (a bare `withPackages` env omits them, making `pip install -e .` silently no-op), and `--no-build-isolation` reuses those already present in the env, avoiding a network fetch.
   - **Read-only-store workaround**: pip cannot install into the `python3.withPackages` environment (it lives in the read-only Nix store), so the `shellHook` creates `.venv` with `--system-site-packages` to inherit the Nix packages, recreates it when `home`/system-site-packages in `pyvenv.cfg` don't match the current interpreter, and installs with `pip install --no-build-isolation --no-deps -e .` (`--no-deps` keeps pip from trying to resolve/install `pymupdf`/`pymupdf4llm` into the store).
-  - **stdout cleanliness**: `PYMUPDF_SUGGEST_LAYOUT_ANALYZER=0` is exported because `pymupdf4llm` 0.3.x prints a "consider pymupdf_layout" recommendation to stdout on import when `pymupdf_layout` is absent (as in nixpkgs); the tool reserves stdout for `--help`/`--version`. The 2.x shim does not emit it.
+  - **stdout cleanliness**: `PYMUPDF_SUGGEST_LAYOUT_ANALYZER=0` is exported because `pymupdf4llm` 0.3.x prints a "consider pymupdf_layout" recommendation to stdout on import when `pymupdf_layout` is absent (as in nixpkgs); stdout must stay clean for `--stdout` document output (and `--help`/`--version`). This export is defense in depth: `cli.py` already defaults the same variable to `0` before importing the converter, which covers runs outside `nix develop` too. The 2.x shim does not emit the hint.
   - **Trade-offs**: Requires Nix/flakes; pip/pipx/uv installs remain supported for non-Nix users (Python >= 3.11).
 
 - **Decision**: Publish the CLI through **`packages.default` + `apps.default`** so the flake doubles as a distribution channel.
   - **Rationale**: `buildPythonApplication` produces a self-contained package whose `bin/pdf2md` wrapper carries the interpreter and runtime deps, so `nix profile install github:fredmnpinto/pdf2md` and `nix run github:fredmnpinto/pdf2md -- input.pdf` work without a checkout. `apps.default` points at `${pdf2md}/bin/pdf2md` for `nix run`; `meta.mainProgram = "pdf2md"` keeps the default binary unambiguous.
   - **Build details**: `pyproject = true` with `setuptools` as the build system; runtime deps are listed explicitly (`pymupdf`, `pymupdf4llm`) so the Python runtime-dependency check sees every `Requires-Dist` satisfied; `doCheck = false` because the test suite runs in the dev shell/CI (it needs `pytest`, which is not a runtime dependency); `src = ./.` copies only the git-tracked tree, so `.venv/` and `__pycache__/` are excluded from the build.
-  - **stdout cleanliness**: `makeWrapperArgs = [ "--set" "PYMUPDF_SUGGEST_LAYOUT_ANALYZER" "0" ]` bakes the dev shell's suppression into the installed wrapper, so the `pymupdf4llm` 0.3.x import-time recommendation cannot pollute stdout outside `nix develop`.
+  - **stdout cleanliness**: `makeWrapperArgs = [ "--set" "PYMUPDF_SUGGEST_LAYOUT_ANALYZER" "0" ]` bakes the dev shell's suppression into the installed wrapper, so the `pymupdf4llm` 0.3.x import-time recommendation cannot pollute stdout for `nix profile install`/`nix run` users. This is a second layer: `cli.py` also defaults the variable to `0` before importing the converter, so pip/pipx/uv installs and plain `.venv` runs stay clean too; the wrapper's explicit `--set` still wins.
   - **Trade-offs**: Two dependency resolutions are supported — nixpkgs' `pymupdf` 1.28.2 + `pymupdf4llm` 0.3.4 for the Nix package, and PyPI's `pymupdf4llm` 2.x (which pulls `pymupdf` 2.x and `pymupdf_layout`) for pip/pipx/uv. The `pymupdf4llm.to_markdown()` call keeps a single code path across both.
 
-- **Decision**: **Exit-code contract** — `0` success, `1` runtime error, `2` argparse usage error.
+- **Decision**: **Exit-code contract** — `0` success, `1` runtime error, `2` argparse usage error (including `--stdout` combined with `-o/--output`).
   - **Rationale**: Composes cleanly with shell scripts and CI; argparse naturally raises `SystemExit(2)` on bad arguments.
 
 - **Decision**: **No public importable API** (v1).
@@ -99,7 +104,8 @@ No persistent data models. Conversion is a pure text-in/text-out transform; the 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `input` | `Path` | Yes | Positional argument: path to the input PDF. |
-| `output` | `Path \| None` | No | `-o/--output` destination; `None` means "derive from input". |
+| `output` | `Path \| None` | No | `-o/--output` destination; `None` means "derive from input". Not applicable when `stdout` is true. |
+| `stdout` | `bool` | No | `--stdout`: write Markdown to stdout; mutually exclusive with `output`. |
 
 ---
 
@@ -108,7 +114,7 @@ No persistent data models. Conversion is a pure text-in/text-out transform; the 
 ### User Interface (CLI)
 
 ```
-usage: pdf2md [-h] [--version] [-o OUTPUT] input
+usage: pdf2md [-h] [--version] [-o OUTPUT | --stdout] input
 
 positional arguments:
   input                  Path to the input PDF file
@@ -117,15 +123,17 @@ options:
   -h, --help             show help and exit
   --version              show version and exit
   -o, --output OUTPUT    Output Markdown path (default: <input-stem>.md)
+  --stdout               Write Markdown to stdout instead of a file
 ```
 
-- **Exit codes**: `0` success · `1` runtime error · `2` usage error.
-- **Streams**: conversion output and the `Wrote <out>` / warning messages go to **stderr**; **stdout** carries only `--help`/`--version` text (reserved for a future `--stdout` flag).
+- **Exit codes**: `0` success (including the empty-PDF case: an empty file plus a warning, or with `--stdout`, a warning on stderr and no stdout output) · `1` runtime error · `2` usage error (including `--stdout` combined with `-o/--output`).
+- **Streams**: warnings/errors and the `Wrote <out>` confirmation go to **stderr**; **stdout** carries the Markdown (exactly the string that would be written to the file — no added trailing newline, no banner) when `--stdout` is used, and otherwise only `--help`/`--version` text. Success in `--stdout` mode is silent (`stderr` empty).
+- **`--stdout`** writes the converted Markdown to stdout instead of a file: no `.md` is created, no output path is derived, and the output-parent/input==output checks are skipped. Combining it with `-o/--output` is a parse-time usage error (exit `2`).
 - **`--version`** prints `pdf2md <version>` (via argparse's `version` action) and exits `0`.
 
 ### Distribution
 
-- **Nix**: `packages.default` builds a `buildPythonApplication` (`meta.mainProgram = "pdf2md"`) and `apps.default` exposes `${pdf2md}/bin/pdf2md`, enabling `nix profile install github:fredmnpinto/pdf2md` and `nix run github:fredmnpinto/pdf2md -- input.pdf` with no checkout. The installed wrapper sets `PYMUPDF_SUGGEST_LAYOUT_ANALYZER=0`.
+- **Nix**: `packages.default` builds a `buildPythonApplication` (`meta.mainProgram = "pdf2md"`) and `apps.default` exposes `${pdf2md}/bin/pdf2md`, enabling `nix profile install github:fredmnpinto/pdf2md` and `nix run github:fredmnpinto/pdf2md -- input.pdf` with no checkout. The installed wrapper sets `PYMUPDF_SUGGEST_LAYOUT_ANALYZER=0` (the CLI also defaults it in code before importing the converter).
 - **Python packaging**: `pyproject.toml` declares the `pdf2md` console script plus the `pymupdf>=1.28,<3` / `pymupdf4llm>=0.3,<3` dependencies, so `pipx install git+https://github.com/fredmnpinto/pdf2md.git`, `uv tool install git+https://github.com/fredmnpinto/pdf2md.git`, and `pip install --user git+https://github.com/fredmnpinto/pdf2md.git` all install the same CLI.
 
 ### External Integrations
@@ -134,7 +142,7 @@ options:
 
 ### Error Handling
 
-The CLI validates input before conversion, then maps conversion exceptions to messages. All paths write to stderr and return `1`:
+The CLI validates input before conversion, then maps conversion exceptions to messages. All paths write to stderr and return `1`, except argparse usage errors, which exit `2`. In `--stdout` mode the output-only checks (`--output` equals input, `--output` parent missing) do not run, and the file write is replaced by a single `sys.stdout.write(markdown)` followed by `sys.stdout.flush()` inside a `try` that catches `(OSError, ValueError)`. Flushing inside the handler means buffered broken pipes (e.g. `| head` on a large document) produce the documented `could not write to stdout` error and exit `1` instead of exit `120` / `Exception ignored ... BrokenPipeError` at interpreter shutdown; before returning, fd 1 is redirected to `os.devnull` so the shutdown flush cannot re-raise. The full mapping:
 
 | Condition | Message | Source |
 |-----------|---------|--------|
@@ -146,6 +154,8 @@ The CLI validates input before conversion, then maps conversion exceptions to me
 | Password-protected PDF | `password-protected PDF is not supported yet` | `PasswordProtectedError` from `converter.py` |
 | Other OS/IO error during conversion | `could not convert PDF: <exc>` | `OSError` |
 | Output write failure | `could not write output file <path>: <exc>` | `cli.py` |
+| `--stdout` combined with `-o/--output` | `argument ...: not allowed with argument ...` | `argparse` (exit `2`) |
+| stdout write/flush failure (`BrokenPipeError`/`OSError`/`ValueError`, e.g. `\| head`) | `could not write to stdout: <exc>` | `cli.py` |
 
 **Converter-level error types** (`converter.py`):
 
@@ -155,7 +165,7 @@ The CLI validates input before conversion, then maps conversion exceptions to me
 
 Note: PyMuPDF opens some non-PDF files (e.g. plain text) and password-protected PDFs *without* raising, so the explicit `is_pdf` and `needs_pass` checks are required to detect those cases. A `FileNotFoundError` during open is re-raised (the CLI checks file existence earlier, but this keeps the wrapper honest). Any other exception from `pymupdf.open` or `pymupdf4llm.to_markdown` (garbage/corrupt files) is mapped to `NotAPdfError`.
 
-**Empty result** (0-page / blank / textless PDF): `pymupdf4llm` can return whitespace or page separators instead of `""`, so `convert_to_markdown` normalizes whitespace-only output to `""`. The CLI then writes an empty `.md` file, prints `Warning: no text found in PDF; wrote empty file: <output_path>`, and exits `0`.
+**Empty result** (0-page / blank / textless PDF): `pymupdf4llm` can return whitespace or page separators instead of `""`, so `convert_to_markdown` normalizes whitespace-only output to `""`. The CLI then either writes an empty `.md` file, prints `Warning: no text found in PDF; wrote empty file: <output_path>`, and exits `0`; or, with `--stdout`, writes nothing to stdout, prints `Warning: no text found in PDF; nothing written to stdout` to stderr, and exits `0`.
 
 ---
 

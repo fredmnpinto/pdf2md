@@ -1,122 +1,72 @@
-# pdf2md — Spec
+# `--stdout` Flag — Spec
 
 ## Overview
 
-`pdf2md` is a small Python command-line program that converts a PDF file into a Markdown (`.md`) document. It wraps PyMuPDF's purpose-built PDF→Markdown converter (`pymupdf4llm`) to produce clean, structured Markdown — including headings, body text, and tables — suitable for LLM/RAG pipelines, documentation, or version-controlled notes.
+Add a `--stdout` flag to the `pdf2md` CLI so the converted Markdown is written to standard output instead of a `.md` file. This lets the tool compose with shell pipelines (`pdf2md in.pdf --stdout | ...`) and redirections without creating an intermediate file. The flag is mutually exclusive with `-o/--output`, never touches the filesystem for output, and leaves the existing default and `-o` behaviors unchanged.
 
-This is a **greenfield** project: the working directory `/home/fred/Projects/pdf2md` is empty (no files, no git repo, no README/ARCHITECTURE.md). There is **no GitHub repository or issue tracker yet**, so all functional requirements are self-contained in this spec. When a repo and issues are created, each acceptance criterion can be migrated to an issue with its acceptance criteria.
+**Scope note:** this spec covers only the `--stdout` change; it does not re-document the project. Project context lives in `README.md` and `ARCHITECTURE.md`. The repository currently has **no GitHub issues** (GitHub search returns 0), so the requirements for this change live in this spec. If issues are created later, each Must Have criterion maps to one issue's acceptance criteria.
 
 ## User Stories
 
-- As a developer, I want to run `pdf2md input.pdf` and get a `input.md` file, so that I can convert documents with a single command.
-- As a developer, I want to choose where the output goes via a `--output` flag, so that I can control the destination path.
-- As a developer, I want headings, paragraphs, and tables in the PDF to come through as Markdown headings, paragraphs, and pipe-separated tables, so that the output is usable in docs and LLM pipelines.
-- As a developer, I want clear error messages and non-zero exit codes when something goes wrong (missing file, non-PDF, password-protected), so that I can script around failures.
-- As a developer, I want a reproducible Nix dev environment (`nix develop`), so that I don't have to hand-manage Python dependencies.
+- As a shell user, I want `pdf2md input.pdf --stdout` to print the Markdown to stdout, so that I can pipe or redirect it without creating an intermediate file.
+- As a script/CI author, I want `--stdout` and `-o/--output` to be mutually exclusive with a usage error (exit `2`), so that a mistaken combination fails loudly instead of silently ignoring one option.
+- As a pipeline author, I want stdout to contain only Markdown and all diagnostics on stderr, so that `pdf2md in.pdf --stdout > out.md` and `pdf2md in.pdf --stdout | head` are safe.
+- As an existing user, I want `pdf2md input.pdf` and `pdf2md input.pdf -o out.md` to behave exactly as before, so that upgrading does not break my workflows.
 
 ## Acceptance Criteria
 
 ### Must Have
 
-- [ ] `pdf2md input.pdf` produces a Markdown file at `input.md` (same directory as the input) containing the document's text.
-- [ ] `pdf2md input.pdf --output out.md` (also `-o out.md`) writes the Markdown to exactly `out.md`.
-- [ ] Headings are rendered as Markdown ATX headings (`#`, `##`, …). A PDF with a visually larger heading font produces at least one `#`-prefixed heading line in the output.
-- [ ] Body paragraphs are emitted as plain text separated by blank lines.
-- [ ] Tables are emitted as Markdown tables (pipe-separated `|` cells with a `|---|` separator row) — or, when the PDF table cannot be reliably parsed, as readable text rather than being silently dropped.
-- [ ] Multi-page PDFs are converted in full: text from every page appears in the output, in page order.
-- [ ] Running the program with no arguments prints usage to stderr and exits with code `2`.
-- [ ] `--version` prints the package version and exits `0`; `--help` prints usage and exits `0`.
-- [ ] A missing input file prints a clear error to stderr and exits with code `1`.
-- [ ] A non-PDF input (e.g., a `.txt` file passed as the argument) prints a clear error to stderr and exits with code `1`.
-- [ ] A password-protected PDF (without a password) prints a clear error to stderr and exits with code `1`.
-- [ ] Passing `--output` equal to the input path (would overwrite the source) is rejected with an error and exits non-zero.
-- [ ] The project includes a `flake.nix` such that `nix develop` provides a working Python environment with the project's runtime dependencies installed (importable without further setup).
-- [ ] The test suite passes (`pytest`) and covers output-name derivation, the happy path (heading/paragraph/table), and the error paths above.
+- [ ] `pdf2md input.pdf --stdout` writes the converted Markdown to stdout and exits `0`.
+- [ ] With `--stdout`, no output file is created: no `<input-stem>.md` next to the input and no file at any other path.
+- [ ] stdout content is exactly the Markdown that would have been written to the `.md` file: identical string, no prefix/banner, no added trailing newline, no status text. (Verified by comparing captured stdout with the contents of a file produced by an equivalent `-o` run for the same PDF.)
+- [ ] On `--stdout` success, no `Wrote ...` message is printed and stderr is empty (silent success).
+- [ ] `--stdout` and `-o/--output` are declared in one `argparse` mutually exclusive group. Passing both is a usage error: exit code `2`, an argparse message on stderr containing `not allowed with argument`, no conversion, no file created. (When `main([...])` is called programmatically, argparse raises `SystemExit(2)` — the same convention as the existing no-args test.)
+- [ ] With `--stdout`, output-path derivation (`derive_output_path`), the output-parent-directory existence check, and the input==output guard are **not** executed. Only input validation runs.
+- [ ] Input validation is unchanged under `--stdout`: missing file → `Error: input file not found: <path>`; directory → `Error: input is a directory, not a file: <path>`; non-PDF/corrupt → `Error: not a valid PDF: <path>`; password-protected → `Error: password-protected PDF is not supported yet`. All exit `1`, all messages on stderr, stdout empty.
+- [ ] Empty/textless PDF with `--stdout`: nothing written to stdout, warning `Warning: no text found in PDF; nothing written to stdout` on stderr, exit `0`, no file created.
+- [ ] Default behavior (`pdf2md input.pdf` → `input.md`, `Wrote ...` on stderr) and `-o/--output` behavior are unchanged, including error messages and exit codes.
+- [ ] `--help` documents `--stdout` and renders usage as `pdf2md [-h] [--version] [-o OUTPUT | --stdout] input`.
+- [ ] The full existing test suite passes; new tests cover the stdout happy path, empty PDF, mutual-exclusion rejection, and input validation under `--stdout`.
+- [ ] No new runtime dependencies; `argparse` remains the only CLI framework.
+- [ ] `README.md` and `ARCHITECTURE.md` are updated: `--stdout` removed from the out-of-scope/deferred lists, and usage, stream contract, exit codes, and empty-PDF behavior documented.
 
 ### Should Have
 
-- [ ] Uppercase `.PDF` extension and extension-less inputs derive sensible `.md` output names.
-- [ ] A one-line success message is printed to stderr (`Wrote out.md`), leaving stdout unused so future `--stdout` support won't break.
-- [ ] The project uses a `pyproject.toml` with a console-script entry point `pdf2md`, so `pip install -e .` (and the Nix shell) expose the `pdf2md` command.
+- [ ] A `sys.stdout.write()` failure (`OSError`, including `BrokenPipeError` from e.g. `| head`) is reported as `Error: could not write to stdout: <exc>` on stderr and exits `1`, not an unhandled traceback.
+- [ ] Help output is covered by a test: `--stdout` is listed and usage contains `[-o OUTPUT | --stdout]`.
+- [ ] `python -m pdf2md input.pdf --stdout` works (follows automatically from the shared `main()`; no extra code).
 
 ### Won't Have
 
-- [ ] Embedded image extraction / writing image files (`write_images`, `embed_images` remain disabled).
-- [ ] OCR for scanned/image-only PDFs (no Tesseract integration).
-- [ ] A stable, documented importable Python API (the internal modules exist, but they are not a supported public contract).
-- [ ] `--pages` page-range selection, `--password`, or `--stdout` flags (candidates for a later version).
+- [ ] `-` as a stdin/stdout sentinel, stdin input, or reading PDF bytes from a pipe.
+- [ ] Streaming/chunked conversion (the converter returns a complete string; one write).
+- [ ] `--quiet`, `--force`, `--pages`, `--password`, OCR, image extraction, or batch/multi-input conversion.
+- [ ] Auto-creation of output directories.
+- [ ] Changes to `converter.py`, `pyproject.toml`, `flake.nix`, dependencies, or the public API surface.
 
 ## Edge Cases
 
-- **Missing input file**: error message on stderr, exit code `1`. No partial output file is created.
-- **Input is a directory**: error (not a file), exit `1`.
-- **Non-PDF input**: PyMuPDF fails to open it; catch the exception and report "not a valid PDF", exit `1`.
-- **Corrupt/truncated PDF**: same handling as non-PDF — reported clearly, exit `1`.
-- **Empty PDF (0 pages)**: conversion yields an empty string; write an empty `.md` file, print a warning to stderr, exit `0`.
-- **Multi-page PDF**: all pages concatenated into a single Markdown document, in page order, with page boundaries preserved by the converter.
-- **Password-protected PDF**: PyMuPDF reports the document needs a password; v1 has no `--password` flag, so report a clear "password-protected PDF is not supported yet" error and exit `1`.
-- **No `--output` flag**: derive `<input-stem>.md` in the same directory as the input (strip a trailing `.pdf`/`.PDF`; if there is no suffix, append `.md`).
-- **`--output` with a missing parent directory**: v1 does **not** auto-create directories; report an error and exit `1`.
-- **`--output` equal to input path** (`-o input.pdf`): rejected to avoid destroying the source; error and exit non-zero.
-- **`--output` with a non-`.md` extension** (`-o out.txt`): the exact path given is respected (content is still Markdown); the user owns the extension choice.
-- **Image-only / scanned PDF (no text layer)**: conversion produces little or no text; the result is an empty/blank `.md` file. Documented as a known v1 limitation (OCR is out of scope).
-- **Whitespace/unicode filenames**: handled as ordinary `Path` values; no special restrictions beyond the OS.
-
-## Dependencies
-
-- **Runtime**: `pymupdf` (PyMuPDF). Note: as of PyMuPDF 2.0, the PDF→Markdown functionality previously shipped in the standalone `pymupdf4llm` package was **merged into `pymupdf`** and is exposed as `Document.to_markdown()` (plus `to_json()`, `to_text()`, and `use_layout()`). The `pymupdf4llm` PyPI package (≥2.0) is now a thin compatibility shim depending on `pymupdf`. We treat "the `pymupdf4llm` converter" as the feature set, but the dependency we install is `pymupdf` (≥2.x).
-- **Dev only**: `pytest` (test runner). Optionally `ruff`/`black` for linting/formatting (nice-to-have, not required).
-- **Build/env**: `nixpkgs` + (optionally) `flake-utils` for the flake.
-- No GitHub issue IDs to reference (no repo yet).
+| Case | Expected behavior |
+|---|---|
+| `--stdout` combined with `-o/--output` (either order) | argparse usage error, exit `2`; no file; enforced at parse time, so it wins over input validation even when the input is missing. |
+| `--stdout` + missing input | exit `1`, `Error: input file not found: <path>` on stderr, stdout empty. |
+| `--stdout` + directory input | exit `1`, `Error: input is a directory, not a file: <path>` on stderr, stdout empty. |
+| `--stdout` + non-PDF/corrupt input | exit `1`, `Error: not a valid PDF: <path>` on stderr, stdout empty. |
+| `--stdout` + password-protected PDF | exit `1`, `Error: password-protected PDF is not supported yet` on stderr, stdout empty. |
+| `--stdout` + empty/textless PDF | stdout empty; `Warning: no text found in PDF; nothing written to stdout` on stderr; exit `0`. |
+| `--stdout` success | stdout = exact Markdown string; stderr empty; exit `0`; no `.md` created anywhere. |
+| Input lives in a read-only directory | `--stdout` succeeds (no write attempted), whereas default mode would fail writing the `.md`. |
+| stdout closed early (`| head`) | Should: `Error: could not write to stdout: <exc>` on stderr, exit `1`, no traceback. |
+| `--stdout` with `--version` / `--help` | argparse actions behave as today (`--version` prints to stdout and exits `0`); no input or conversion required. |
+| Markdown whose content is whitespace-only | The converter already normalizes it to `""`; follows the empty-PDF row. |
 
 ## Design / Technical Approach
-
-### CLI framework
-
-Use the standard library **`argparse`**. Rationale: a single command with one positional arg and two flags doesn't warrant `click`/`typer`, and `argparse` keeps the dependency surface minimal (only `pymupdf` at runtime) and the Nix shell trivial. `argparse` also gives `--help`, `--version`, usage output, and exit code `2` on bad arguments for free.
-
-### Proposed package layout (src layout)
-
-```
-pdf2md/
-├── flake.nix                     # Nix dev shell
-├── pyproject.toml                # metadata + [project.scripts] pdf2md = "pdf2md.cli:main"
-├── .gitignore
-├── README.md                     # (added by Documenter later)
-├── src/
-│   └── pdf2md/
-│       ├── __init__.py           # __version__
-│       ├── __main__.py           # enables `python -m pdf2md`
-│       ├── cli.py                # argparse parsing, exit codes, error → stderr
-│       └── converter.py          # thin wrapper over Document.to_markdown()
-└── tests/
-    ├── test_cli.py               # arg parsing, output-name derivation, exit codes
-    └── test_converter.py         # happy path, tables, multi-page, empty PDF, errors
-```
-
-### How `pymupdf4llm` is used
-
-`converter.py` exposes a single function and keeps all conversion logic isolated:
-
-```python
-# converter.py (sketch)
-import pymupdf
-
-def convert_to_markdown(path: str) -> str:
-    """Return Markdown text for the PDF at `path`."""
-    with pymupdf.open(path) as doc:   # Document context manager (PyMuPDF >= 1.24)
-        return doc.to_markdown()      # modern API: merged-in 4LLM converter
-```
-
-- The modern entry point is `pymupdf.Document.to_markdown()`. (The legacy `pymupdf4llm.to_markdown()` still exists for backward compatibility but is not required; we use the `Document` method as recommended.)
-- Images are **not** written or embedded because we never pass `write_images=True` / `embed_images=True` (their defaults keep images off), which matches the v1 scope.
-- Headings are detected via the converter's default font-size heuristic (`IdentifyHeaders` behavior). Tables are detected and emitted as Markdown tables automatically. No custom post-processing is required in v1.
-- If an error occurs during open/conversion (non-PDF, corrupt, password), the exception is caught in `cli.py` and mapped to a human-readable message + exit code `1`.
 
 ### CLI contract
 
 ```
-usage: pdf2md [-h] [--version] [-o OUTPUT] input
+usage: pdf2md [-h] [--version] [-o OUTPUT | --stdout] input
 
 positional arguments:
   input                  Path to the input PDF file
@@ -125,90 +75,107 @@ options:
   -h, --help             show help and exit
   --version              show version and exit
   -o, --output OUTPUT    Output Markdown path (default: <input-stem>.md)
+  --stdout               Write Markdown to stdout instead of a file
 ```
 
-- Output-name derivation lives in a small pure function (`derive_output_path(input, output)`) so it is unit-testable in isolation.
-- Exit codes: `0` success · `1` runtime error (missing file, non-PDF, password, write failure, input==output) · `2` argparse usage error.
-- Errors → stderr; success confirmation ("Wrote out.md") → stderr; stdout is reserved (empty in v1).
+Exit codes unchanged: `0` success · `1` runtime error · `2` usage error (now also `--stdout` + `-o/--output`).
 
-### flake.nix approach
+**Why mutual exclusion instead of "`--stdout` wins":** an explicit usage error (exit `2`) is unambiguous and prevents silently ignoring `-o`; `argparse` provides the behavior, message, and exit code for free.
 
-Provide a `flake.nix` whose `devShells.default` produces a Python environment with the runtime and dev dependencies. Sketch (Developer finalizes; `nixpkgs` already packages `pymupdf`):
+### `argparse` change (`build_parser`)
 
-```nix
-{
-  description = "pdf2md development environment";
+Replace the standalone `-o/--output` argument with a mutually exclusive group; keep `input` and `--version` where they are:
 
-  inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    flake-utils.url = "github:numtide/flake-utils";
-  };
-
-  outputs = { self, nixpkgs, flake-utils }:
-    flake-utils.lib.eachDefaultSystem (system: let
-      pkgs = nixpkgs.legacyPackages.${system};
-      pythonEnv = pkgs.python3.withPackages (ps: [ ps.pymupdf ps.pytest ]);
-    in {
-      devShells.default = pkgs.mkShell {
-        packages = [ pythonEnv ];
-        shellHook = ''
-          # make `pdf2md` available in the shell via editable install
-          # (or expose it through the wrapper; Developer decides)
-        '';
-      };
-    });
-}
+```python
+group = parser.add_mutually_exclusive_group()
+group.add_argument(
+    "-o", "--output", metavar="OUTPUT",
+    help="Output Markdown path (default: <input-stem>.md)",
+)
+group.add_argument(
+    "--stdout", action="store_true",
+    help="Write Markdown to stdout instead of a file",
+)
 ```
 
-Key points:
-- The runtime dependency is `pymupdf` (which now includes the 4LLM converter). If the nixpkgs version is older than 2.0 and lacks `to_markdown`, pin `pymupdf` ≥2.x (or add `pymupdf4llm` as a `buildPythonPackage` from PyPI) — the Developer must verify the actual nixpkgs revision at implementation time and pin accordingly.
-- `pytest` (and optionally `ruff`) are included in the shell for development/testing.
-- `nix develop` must leave the environment ready to run `pdf2md --version` and `pytest` without further manual steps.
+No custom post-parse check is needed — argparse rejects the combination with exit `2` before `main()` sees the arguments.
 
-## API Design
+### `main()` control flow
 
-There is **no public importable API** by design (v1 scope). The internal module boundary is documented here so the Developer keeps concerns separated:
+1. `args = parser.parse_args(argv)` — unchanged; mutual exclusion is enforced here.
+2. `input_path = Path(args.input)`.
+3. If `args.stdout` is false: derive `output_path`, run the input==output guard, then the output-parent check (existing code, unchanged). If `args.stdout` is true: no output path is computed; both output checks are skipped.
+4. Input validation (existence, directory) runs in both modes with the same messages and exit codes.
+5. `convert_to_markdown()` and its exception mapping are unchanged.
+6. Empty result:
+   - default/`-o`: unchanged (write an empty file, existing warning, exit `0`);
+   - `--stdout`: print `Warning: no text found in PDF; nothing written to stdout` to stderr, write nothing to stdout, exit `0`.
+7. Non-empty result:
+   - `--stdout`: `sys.stdout.write(markdown)`, return `0`, no stderr message;
+   - default/`-o`: unchanged (`write_text`, `Wrote ...`, exit `0`).
 
-### Internal function contracts (not a public API)
+`print(markdown)` is forbidden for the stdout path: it appends a newline the file would not contain. Use `sys.stdout.write(markdown)` exactly once.
 
-- `pdf2md.converter.convert_to_markdown(path: str | Path) -> str` — opens the PDF and returns Markdown text; raises on invalid/password/corrupt input (caught by the CLI).
-- `pdf2md.cli.derive_output_path(input: str | Path, output: str | Path | None) -> Path` — pure name-derivation logic (see Edge Cases).
-- `pdf2md.cli.main(argv: list[str] | None = None) -> int` — argparse entry point returning the exit code.
+### Streams & messages
 
-### Data models
+- **stdout:** Markdown only when `--stdout` is used; otherwise only `--help`/`--version` text as today.
+- **stderr:** all warnings/errors. No success message in `--stdout` mode.
+- No `PYMUPDF_SUGGEST_LAYOUT_ANALYZER` change is needed — the existing suppression already keeps `pymupdf4llm`'s import-time hint off stdout.
 
-No persistent data models. Conversion is a pure text-in/text-out transform; state is limited to CLI arguments.
+### Reuse Plan
 
-## UI/UX
+- **Canonical owner:** `src/pdf2md/cli.py` — extend `build_parser()` (mutually exclusive group) and `main()` (mode branch). No new module or helper: the branch is ~10 lines with a single caller.
+- **New files:** none.
+- **Duplication audit:** output writing exists only in `cli.py`; `converter.py` is a pure conversion function and stays untouched. A shared "write output" abstraction is not warranted for two call sites with different sinks (file vs. stream) and different post-actions.
 
-This is a CLI, so there is no visual interface. "UX" is defined by the CLI contract above:
+### Documentation deliverables (Documenter)
 
-- **Consistency**: all diagnostics go to stderr; stdout is reserved (empty in v1).
-- **Predictability**: output is written next to the input by default; an explicit `-o` is honored exactly.
-- **Failure transparency**: every failure path yields a specific, actionable message and a distinct non-zero exit code, so the tool composes well in shell scripts and CI.
-- **No graphical, web, or mobile interface** is in scope for v1.
+`README.md`:
+- **Features:** replace "stdout carries only `--help`/`--version` text (reserved for a future `--stdout` flag)" with the new stream contract (stdout carries Markdown with `--stdout`; otherwise only help/version).
+- **Out of scope (v1):** remove `--stdout` from the flag list (keep `--password`, `--pages`).
+- **Usage:** add `pdf2md input.pdf --stdout`, `pdf2md input.pdf --stdout > out.md`, and `pdf2md input.pdf --stdout | head` examples; state that no `.md` is written and no `Wrote ...` message appears.
+- **Exit codes:** `2` now also covers combining `--stdout` with `-o/--output`; note the `0` empty-PDF-with-`--stdout` case (warning, no stdout).
+- **Output-name derivation:** note it is skipped in `--stdout` mode.
+- **Common errors:** add the mutual-exclusion usage error example.
+- **Known limitations:** an empty/textless PDF with `--stdout` produces no stdout output.
+
+`ARCHITECTURE.md`:
+- **§1 Overview:** Scope/Target State — `--stdout` is supported; remove it from the "no ... flags" and deferred-capability lists.
+- **§3 Key Patterns & Decisions:** update the "route all diagnostics to stderr / reserve stdout" decision (stdout = Markdown under `--stdout`, help/version otherwise) and add a decision bullet for the mutually exclusive `-o | --stdout` group (rationale: prevents ambiguous intent; argparse supplies exit `2`).
+- **§4 Data Models:** add `stdout` (`bool`, not required, "write Markdown to stdout; mutually exclusive with `output`").
+- **§5 Interfaces:** update the usage block, streams bullet, exit-code bullet, and `--stdout` description; update the Error Handling table (output-only checks skipped in stdout mode) and the empty-result paragraph (stdout variant).
+- **§5 flake stdout-cleanliness rationale:** reword "reserves stdout for `--help`/`--version`" to include `--stdout` output.
+- No behavior change to `flake.nix`; its wrapper environment variable stays.
 
 ## Tests
 
-- `test_cli.py`:
-  - `derive_output_path`: default naming (`a.pdf`→`a.md`), uppercase `.PDF`, extension-less input, explicit `-o` passthrough, and rejection of `input == output`.
-  - argparse: missing-argument → exit `2`; `--version`/`--help` → exit `0`.
-- `test_converter.py` (uses PyMuPDF to generate fixture PDFs in-test — no binary fixtures checked in):
-  - Happy path: a PDF with a heading, a paragraph, and a table → assert output contains an ATX heading, the paragraph text, and a Markdown table (or readable table text).
-  - Multi-page: text from page 1 and page 2 both present, in order.
-  - Empty PDF (0 pages): returns empty string; CLI writes an empty file and exits `0` with a warning.
-  - Errors: missing file, non-PDF input, and password-protected PDF each raise/exit with the documented behavior.
-- `flake.nix` smoke test (manual or in CI): `nix develop -c python -c "import pymupdf"` and `nix develop -c pytest`.
+In `tests/test_cli.py`, following existing conventions (in-test PyMuPDF fixtures, `tmp_path`, `capsys`, call `main([...])`):
 
-## Out of Scope (v1)
+- `test_main_stdout_happy_path`: `main([pdf, "--stdout"])` → rc `0`; captured stdout contains `"Hello world"`; captured stdout exactly equals the content of a file produced by an equivalent `-o` run for the same PDF; `captured.err == ""`; `not (tmp_path / "doc.md").exists()`.
+- `test_main_stdout_empty_pdf`: blank-page PDF; rc `0`; `captured.out == ""`; `"no text" in captured.err.lower()`; no `empty.md` created.
+- `test_main_stdout_with_output_rejected`: `with pytest.raises(SystemExit)` around `main([pdf, "--stdout", "-o", out])`; `.code == 2`; `"not allowed with argument" in captured.err`; no file created. (argparse raises `SystemExit`, matching the existing `test_main_no_args_exits_2` convention.)
+- `test_main_stdout_input_validation` (parametrized or separate): missing file, directory, non-PDF, password-protected → rc `1`, the same message fragments as the existing tests, `captured.out == ""`.
+- Keep the existing default/`-o`/empty-PDF tests unchanged — they are the regression guard for unchanged behavior.
+- Should: help-output test asserting `--stdout` is listed and usage contains `[-o OUTPUT | --stdout]`.
 
-- **Images**: no extraction, saving, or embedding of images (explicitly disabled; may be revisited in v2).
-- **OCR**: no text recovery from scanned/image-only PDFs; image-only pages produce empty output.
-- **Importable API**: the internal `converter.py`/`cli.py` functions are not a supported public contract; stability guarantees apply only to the `pdf2md` command line.
-- **Page-range selection**, **password flag**, **stdout streaming**, **batch/directory conversion**, and **`.json`/`.txt` output modes** are all deferred.
-- **GUI / web frontend**: none.
+Run `pytest` (and `pytest --cov=pdf2md`, 85% gate) as the final developer step.
 
-## Notes for the Developer / Pipeline
+## Dependencies
 
-- There is no git repo yet; the Publisher will initialize one (or a repo is created first) before committing. Until then, no GitHub issue IDs exist to reference — requirements live entirely in this spec.
-- If a GitHub repo + issues are created later, each "Must Have" acceptance criterion should become an issue (requirement with acceptance criteria), per the project's "issues = requirements" convention.
+- None new. Uses `argparse` and `sys` from the standard library; runtime dependencies stay `pymupdf` + `pymupdf4llm`.
+- No GitHub issue IDs: the repository has no issues (GitHub search returns 0). This spec is the requirement source for this change.
+
+## Out of Scope & Prohibitions
+
+**Prohibitions (must not be touched):**
+- `src/pdf2md/converter.py` (signature, exceptions, whitespace normalization), `src/pdf2md/__main__.py`, `pyproject.toml`, `flake.nix`, `tests/test_converter.py`.
+- Existing error messages, exit codes, and the `Wrote ...` / empty-file warning behavior in default and `-o` modes.
+- `derive_output_path` semantics and its tests.
+- No new dependencies, no new files, no public API changes, no speculative config or extension points.
+
+**Out of scope:** stdin/`-` sentinel, streaming/chunked conversion, `--quiet`/`--force`, `--pages`, `--password`, OCR, images, batch conversion, auto-created directories.
+
+## Notes
+
+- `.gt/spec.md` is the durable working spec for this change and intentionally does not re-document the whole project; persistent context lives in `README.md` / `ARCHITECTURE.md`.
+- Requirements live here because the repository has no GitHub issues; each Must Have criterion can be migrated to an issue later.
