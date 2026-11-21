@@ -5,148 +5,128 @@
   "summary": {
     "critical": 0,
     "warnings": 0,
-    "suggestions": 6,
-    "resolved": 12
+    "suggestions": 5,
+    "resolved": 9
   },
   "critical": [],
   "warnings": [],
   "suggestions": [
     {
-      "category": "Spec",
-      "file": ".gt/spec.md",
-      "line": 123,
-      "issue": "The Streams & messages section still says 'No PYMUPDF_SUGGEST_LAYOUT_ANALYZER change is needed', which the T015 fix falsifies: cli.py now calls os.environ.setdefault(...) before importing the converter. Line 87's argparse design text also predates the loop fix. The shipped behavior is correct and documented in README/ARCHITECTURE; only the spec text is stale. Spec edits are Ask First per AGENTS.md, so this was not changed in the review pass."
-    },
-    {
       "category": "Tests",
-      "file": "tests/test_cli.py",
-      "line": 348,
-      "issue": "The flush regression is covered with an in-process stub, but the real shutdown path and the devnull redirect are not behaviorally exercised by the suite: capsys' fileno() raises, so the redirect falls into its except branch, and the manual `| head` run is the only end-to-end proof. Consider a subprocess test using a pipe whose read end is closed (or `| head`) that asserts exit 1, the exact `Error: could not write to stdout: ...` line, and no `Exception ignored`; running `python -m pdf2md` there would also cover Should Have #3."
+      "file": "tests/",
+      "line": 1,
+      "issue": "Optional, pre-existing coverage gaps unrelated to this docs-only diff: no dedicated test for the overwrite guard (existing output overwritten), for `python -m pdf2md`, or for image absence. Worth adding when the CLI next changes; not required for a README-only edit."
     },
     {
-      "category": "Tests",
-      "file": "tests/test_cli.py",
-      "line": 388,
-      "issue": "The env-default test uses importlib.reload, so it depends on module-reload semantics rather than a fresh interpreter. A subprocess test (env -u PYMUPDF_SUGGEST_LAYOUT_ANALYZER python -c 'import pdf2md.cli, os; print(os.environ[\"PYMUPDF_SUGGEST_LAYOUT_ANALYZER\"])') would pin the import-order guarantee end-to-end."
-    },
-    {
-      "category": "Tests",
-      "file": "tests/test_cli.py",
-      "line": 314,
-      "issue": "No dedicated test pins the ValueError branch added in T016 (closed stdout raises ValueError). A stub whose write/flush raises ValueError would cover it; the current BrokenPipeError test only exercises OSError."
-    },
-    {
-      "category": "Docs",
+      "category": "Security",
       "file": "README.md",
-      "line": 237,
-      "issue": "Residual niche stdout cases are not documented: sys.stdout is None (fd 1 closed at startup) raises AttributeError before the handler, and a non-UTF-8 stdout with a 'replace' error handler can silently mangle non-ASCII Markdown (UnicodeEncodeError itself is caught and reported). Optional: add a Known limitations note rather than widening the implementation."
+      "line": 24,
+      "issue": "Install commands use unpinned `git+https://github.com/fredmnpinto/pdf2md.git` references. This is the canonical HTTPS repo (no secrets, no untrusted source) and was pre-existing, so it is non-blocking; pinning a tag or commit would improve reproducibility if the project later cuts releases."
     },
     {
-      "category": "Docs / Scope",
-      "file": "flake.nix",
-      "line": 56,
-      "issue": "The comment still says 'so a future --stdout flag won't break scripts', but --stdout now exists. flake.nix is in the spec's prohibited list, so this cannot be fixed in this pass; defer to a human-approved cleanup."
-    }
-  ],
-  "resolved": [
-    {
-      "category": "Stream integrity / Spec (Must Have)",
-      "file": "src/pdf2md/cli.py",
-      "line": 15,
-      "issue": "FIXED (was critical). cli.py now imports os and calls os.environ.setdefault('PYMUPDF_SUGGEST_LAYOUT_ANALYZER', '0') at line 15, before the pdf2md.converter import at line 17; pdf2md/__init__.py defines only __version__, so nothing imports pymupdf4llm earlier. setdefault preserves an explicit value. Verified: `env -u PYMUPDF_SUGGEST_LAYOUT_ANALYZER .venv/bin/pdf2md big.pdf --stdout | head -c 40` starts with Markdown and has no 'Consider using...' prefix. test_cli_import_defaults_layout_analyzer_env covers unset -> '0' and preset '1' unchanged."
+      "category": "Docs / Security",
+      "file": "ARCHITECTURE.md",
+      "line": 23,
+      "issue": "The `PYMUPDF_SUGGEST_LAYOUT_ANALYZER=0` import-order guarantee is documented only in ARCHITECTURE (and cli.py comments), not the README. It is an internal correctness detail with no user action required, so ARCHITECTURE ownership is appropriate; an optional cross-link is the only follow-up."
     },
     {
-      "category": "Reliability / Spec (Should Have)",
-      "file": "src/pdf2md/cli.py",
-      "line": 151,
-      "issue": "FIXED (was blocking warning). stdout write and flush are now inside one try catching (OSError, ValueError); on failure fd 1 is redirected to os.devnull (devnull fd closed in finally) so the interpreter-shutdown flush cannot re-raise, then the documented error is printed and 1 returned. Verified: `pdf2md big.pdf --stdout | head -n 1` and `| true` both exit 1 with stderr exactly `Error: could not write to stdout: [Errno 32] Broken pipe` and no 'Exception ignored'. test_main_stdout_flush_failure_is_reported genuinely fails without the flush."
-    },
-    {
-      "category": "Reliability / Encoding",
-      "file": "src/pdf2md/cli.py",
-      "line": 157,
-      "issue": "FIXED (was warning). The handler now catches ValueError alongside OSError, so closed-stdout (ValueError) and UnicodeEncodeError do not escape as tracebacks; the devnull redirect also tolerates OSError/ValueError. Residual sys.stdout-None and non-UTF-8 'replace' cases remain as non-blocking suggestions, not warnings."
-    },
-    {
-      "category": "Tests / Spec (Must Have)",
-      "file": "tests/test_cli.py",
-      "line": 367,
-      "issue": "FIXED (was warning). test_main_stdout_skips_output_derivation monkeypatches pdf2md.cli.derive_output_path and _same_path to raise AssertionError, then asserts rc 0, Markdown on stdout, empty stderr, and no .md; it directly pins Must Have #6."
-    },
-    {
-      "category": "Tests",
-      "file": "tests/test_cli.py",
-      "line": 299,
-      "issue": "ADDRESSED. test_main_stdout_empty_pdf now asserts the exact full warning line (including its trailing newline) and captured.out == ''."
-    },
-    {
-      "category": "Tests",
-      "file": "tests/test_cli.py",
-      "line": 388,
-      "issue": "ADDRESSED. test_cli_import_defaults_layout_analyzer_env asserts unset -> '0' and that a preset '1' is not overwritten; a subprocess variant remains an optional suggestion."
-    },
-    {
-      "category": "Docs",
-      "file": "README.md",
-      "line": 50,
-      "issue": "ADDRESSED. README (lines 50, 89, 190) and ARCHITECTURE (lines 23, 73, 83, 89, 136) now state that cli.py defaults the variable before importing the converter, covering pip/pipx/uv and plain .venv runs, with the Nix wrapper as a second layer."
+      "category": "Quality",
+      "file": "ARCHITECTURE.md",
+      "line": 117,
+      "issue": "README and ARCHITECTURE both restate the CLI contract (usage block, options, streams, exit codes). The duplication is acceptable for now, but a follow-up could have ARCHITECTURE link to the README for the user-facing contract and keep only design rationale; out of scope for a README-only change."
     },
     {
       "category": "Docs",
       "file": "ARCHITECTURE.md",
-      "line": 107,
-      "issue": "ADDRESSED. The output row now reads 'None means derive from input. Not applicable when stdout is true.', and stdout has its own row in the Data Models table."
+      "line": 168,
+      "issue": "ARCHITECTURE still says the empty-result path 'writes an empty `.md` file', while the README now correctly says 'empty output file' (accurate for `-o out.txt`). Pre-existing wording in an intentionally untouched file; optional consistency cleanup."
+    }
+  ],
+  "resolved": [
+    {
+      "category": "Docs / Streams",
+      "file": "README.md",
+      "line": 52,
+      "issue": "FIXED (was warning from spec-compliance and code-quality). The broken-pipe sentence now attributes the failure correctly: 'If the reader closes early (e.g. `pdf2md big.pdf --stdout | head -n 1`), `pdf2md` exits `1` with an error on stderr.' Verified against cli.py:151-169: write+flush are wrapped in `except (OSError, ValueError)`, the message goes to stderr, fd 1 is redirected to devnull, and the handler returns 1."
     },
     {
-      "category": "Tests / Verification",
-      "file": ".pytest_cache/v/cache/nodeids",
+      "category": "Docs",
+      "file": "README.md",
+      "line": 67,
+      "issue": "FIXED (was warning from code-quality). 'empty `.md`' -> 'empty output file', which is accurate for any `-o` destination. Verified against cli.py:130-149: an empty conversion writes `\"\"` to the derived or explicit output path, warns on stderr, and returns 0; with `--stdout` it writes nothing to stdout and warns."
+    },
+    {
+      "category": "Docs",
+      "file": "README.md",
+      "line": 71,
+      "issue": "FIXED (was suggestion from documentation). Added 'No page-range selection (`--pages`).' Verified: build_parser (cli.py:47-71) defines only the positional input, --version, -o/--output, and --stdout; no page-range option exists."
+    },
+    {
+      "category": "Docs / Spec (prior warning)",
+      "file": "README.md",
+      "line": 67,
+      "issue": "RESOLVED. The OCR/no-text-layer limitation now states the exact behavior: empty output file plus stderr warning, or with --stdout nothing on stdout and a warning on stderr, exit 0 in both cases (cli.py:130-149). No longer implies an error or a silent empty result."
+    },
+    {
+      "category": "Docs",
+      "file": "README.md",
+      "line": 68,
+      "issue": "RESOLVED (was warning from code-quality). 'Images are not extracted or embedded' added; verified converter.py:29-30 keeps `write_images`/`embed_images` off."
+    },
+    {
+      "category": "Docs",
+      "file": "README.md",
+      "line": 63,
+      "issue": "RESOLVED (was warning from code-quality/documentation). Non-Nix development path added: `pip install -e '.[dev]'`; pyproject defines the `dev` extra with pytest and pytest-cov."
+    },
+    {
+      "category": "Docs",
+      "file": "README.md",
       "line": 5,
-      "issue": "BENIGN / carried. The stale test_derive_output_keeps_other_suffix nodeid remains cache-only; the current suite collects 41 tests, all passing, and pytest never prunes cached nodeids. Not evidence of a deleted or failing test."
-    },
-    {
-      "category": "Tests / Coverage",
-      "file": "tests/",
-      "line": 1,
-      "issue": "PASS. `nix develop -c pytest --cov=pdf2md --cov-report=term-missing -q` -> 41 passed, TOTAL 89.04% (85% gate), cli.py 93%; missing lines are pre-existing."
+      "issue": "RESOLVED (documentation batch). Quick start now precedes Installation; the overwrite guard ('an existing output file is overwritten', line 50), the `| head` caveat (lines 46/52), the 85% coverage gate (line 60), and `python -m pdf2md` wording (line 47) are all present and accurate."
     },
     {
       "category": "Scope",
       "file": ".",
       "line": 1,
-      "issue": "PASS. Prohibited files untouched (converter.py, __main__.py, pyproject.toml, flake.nix, test_converter.py); changes limited to cli.py, tests/test_cli.py, README.md, ARCHITECTURE.md plus .gt artifacts; no new dependencies or files."
+      "issue": "PASS. Docs-only Quick Mode change: `git status --porcelain` -> ` M README.md` only. No source, test, pyproject, flake, or ARCHITECTURE changes; no new files or dependencies."
     },
     {
-      "category": "Behavior",
-      "file": "src/pdf2md/cli.py",
-      "line": 74,
-      "issue": "PASS. Default and -o behavior unchanged: existing tests pass; `pdf2md big.pdf --stdout > out.md` exits 0 with empty stderr and is byte-identical (cmp) to an equivalent -o run; both conflict orders exit 2 with argparse 'not allowed with argument'; all four input-validation messages are unchanged."
+      "category": "Docs / Content",
+      "file": "README.md",
+      "line": 1,
+      "issue": "PASS. README compacted from 243 to 77 lines while retaining description, install commands (Nix + pipx/uv/pip), usage/options, default and -o naming, overwrite guard, --stdout/-o exclusivity, stream contract, broken-pipe caveat, exit codes, dev/test/coverage, limitations, and license. The ARCHITECTURE.md link (line 29) resolves."
     }
   ],
   "reviewers": {
-    "spec-compliance": "PASS. 16/16 acceptance criteria (13 Must + 3 Should), 5/5 Won't Have respected. Prior critical and blocking warning resolved. 0 critical, 0 warnings; suggestions only (stale spec wording, subprocess pipe test, niche stdout edges, flake.nix stale comment).",
-    "test-coverage": "PASS. 41 passed (34 CLI + 7 converter), 89.04% >= 85%, cli.py 93%. Every new behavior has a direct test; flush regression genuinely fails without flush; skip-derivation proof; exact empty warning; env default. Suggestions: subprocess pipe test, fresh-interpreter env test, ValueError test, devnull redirect not behaviorally exercised in-process.",
-    "security": "PASS. Prior critical stdout contamination CONFIRMED FIXED (cli.py:15 before cli.py:17; setdefault preserves explicit values). Buffered broken pipe fixed (flush + devnull redirect); (OSError, ValueError) caught; no new writes/traversal/secrets/deps. 0 critical, 0 warnings; suggestions: sys.stdout None / non-UTF-8 replace / in-process dup2 / stderr None edge cases, subprocess test, spec wording.",
-    "code-quality": "PASS. Prior findings resolved; 0 critical, 0 warnings, suggestions only (subprocess pipe test, fresh-interpreter env test, ValueError test, docs note for niche stdout cases, flake.nix stale comments). Simplicity gate passed; no new files/deps/abstraction.",
-    "documentation": "N/A - not selected for this diff (essential set); static check: README/ARCHITECTURE are updated and accurate.",
-    "agents-md": "N/A - not selected; no material AGENTS.md-relevant change.",
-    "scope-creep": "N/A - not selected; static check: only the allowed files changed.",
+    "spec-compliance": "PASS. 0 critical, 0 warnings. README checked against cli.py: default `<input-stem>.md`, `-o` verbatim, `-o`==input rejected, existing output overwritten, `--stdout`/`-o` exclusivity, no file/no `Wrote` in stdout mode, streams, exit 0/1/2, install commands, Python >= 3.11, 85% coverage gate, ARCHITECTURE link. Prior OCR/empty-result warning resolved; broken-pipe misattribution fixed in the final edit.",
+    "test-coverage": "PASS. 0 critical, 0 warnings. Accepted Developer execution evidence (shell-capable): `nix develop -c pytest -q` -> 41 passed, exit 0; `--cov=pdf2md` -> 41 passed, TOTAL 89.04% >= 85% gate. README-only diff; development commands (`nix develop`, `pytest`, `pytest --cov=pdf2md`, `pip install -e '.[dev]'`) validated. Remaining items are optional pre-existing gaps (overwrite, `python -m`, image absence), outside a docs-only diff.",
+    "security": "PASS. 0 critical, 0 warnings. No secrets, no unsafe install patterns, no misleading claims. Overwrite guard, broken-pipe exit, and empty-result behavior now documented. Non-blocking suggestions only: unpinned install refs (canonical HTTPS repo, pre-existing) and the conditional PYMUPDF env-var caveat (internal, ARCHITECTURE-owned).",
+    "code-quality": "PASS. 0 critical, 0 warnings. Prior warnings (missing image limitation, non-Nix dev path) resolved; broken-pipe overgeneralization and 'empty `.md`' precision fixed in the final edit. Remaining suggestion: README/ARCHITECTURE duplicate the CLI contract; a follow-up could make ARCHITECTURE link to the README. Simplicity gate N/A (docs-only, no code).",
+    "documentation": "PASS. 0 critical, 0 warnings. All prior findings resolved (image/table caveats, empty-result wording, non-Nix dev path, quick-start ordering, overwrite guard, `| head` caveat, coverage wording, `python -m` wording); `--pages` limitation added in the final edit. No new inaccuracies; Markdown valid; ARCHITECTURE link resolves.",
+    "agents-md": "N/A - not selected for this docs-only diff; static check: no material change to agent configuration, commands, or workflow.",
+    "scope-creep": "N/A - not selected; static check: only README.md changed, ARCHITECTURE.md intentionally untouched, no unplanned features or refactoring.",
     "frontend-design": "N/A - no frontend changes."
   },
   "verification": {
-    "tests": "nix develop -c pytest -q -> 41 passed in 0.85s, exit 0",
-    "coverage": "nix develop -c pytest --cov=pdf2md --cov-report=term-missing -q -> 41 passed, TOTAL 89.04% (fail_under=85 passes), cli.py 93%; missing lines pre-existing",
-    "brokenPipe": "`pdf2md big.pdf --stdout | head -n 1` -> pdf2md exit 1, stderr exactly `Error: could not write to stdout: [Errno 32] Broken pipe`, no 'Exception ignored'; `| true` -> exit 1, same message.",
-    "stdoutRedirection": "`pdf2md big.pdf --stdout > out.md` -> exit 0, stderr empty, byte-identical to an equivalent -o run (cmp).",
-    "envDefault": "`env -u PYMUPDF_SUGGEST_LAYOUT_ANALYZER .venv/bin/pdf2md big.pdf --stdout | head -c 40` -> starts with Markdown, no 'Consider using...' prefix.",
-    "conflict": "Both orders -> exit 2, argparse `not allowed with argument`.",
-    "scope": "Prohibited files untouched; only cli.py, tests/test_cli.py, README.md, ARCHITECTURE.md (plus .gt artifacts) changed; no new deps/files.",
+    "tests": "nix develop -c pytest -q -> 41 passed, exit 0 (Developer, shell-capable).",
+    "coverage": "nix develop -c pytest --cov=pdf2md --cov-report=term-missing -q -> 41 passed, TOTAL 89.04% (fail_under=85 passes).",
+    "scope": "git status --porcelain -> ` M README.md` only; no other tracked changes.",
+    "finalEdits": [
+      "README.md:52 broken-pipe sentence -> cli.py:151-169 catches (OSError, ValueError) on write+flush, prints `Error: could not write to stdout: ...` to stderr, redirects fd 1 to devnull, and returns 1. Accurate.",
+      "README.md:67 'empty output file' -> cli.py:130-149 writes `\"\"` to the derived or explicit output path (any extension), warns on stderr, and returns 0; `--stdout` writes nothing. Accurate for `-o out.txt`.",
+      "README.md:71 `--pages` limitation -> build_parser (cli.py:47-71) exposes only input, --version, -o/--output, and --stdout; no page-range option exists. Accurate."
+    ],
     "corroboratedStatically": [
-      "cli.py:6 imports os; cli.py:15 calls os.environ.setdefault before the converter import at cli.py:17; pdf2md/__init__.py defines only __version__, so no earlier pymupdf4llm import.",
-      "cli.py:151-169 wraps write+flush in try/except (OSError, ValueError), redirects fd 1 to os.devnull with os.close in finally, prints the documented message, returns 1.",
-      "tests/test_cli.py:348-364 flush regression (write succeeds, flush raises BrokenPipeError); :367-385 skip-derivation proof; :299-311 exact empty warning; :388-399 env default.",
-      "README.md:50,89,131,161,190 and ARCHITECTURE.md:23,73,107,145,158 document the final stream contract, CLI-level env default, and broken-pipe handling.",
-      "flake.nix:54-57 still contains the pre-feature 'future --stdout flag' comment; prohibited by the spec."
+      "Default output: derive_output_path (cli.py:24-39) uses `source.with_name(source.stem + \".md\")`; `-o` is returned verbatim.",
+      "Overwrite: cli.py:172-180 calls `output_path.write_text(...)` with no existence check; `-o`==input is rejected at cli.py:86-91.",
+      "Exclusivity: argparse mutually exclusive group (cli.py:59-70) -> usage error exit 2.",
+      "Streams: all diagnostics use `file=sys.stderr` (cli.py:87, 95, 98, 107, 116, 121, 125, 132, 140, 145, 168, 175, 180); stdout receives only Markdown in --stdout mode.",
+      "Images: converter.py:29-30 keeps write_images/embed_images off; the README limitation is accurate.",
+      "`python -m pdf2md`: __main__.py calls main() under SystemExit; requires pdf2md importable in the active environment, as the README states.",
+      "Coverage gate: pyproject.toml:35-37 `fail_under = 85`; README line 60 matches.",
+      "ARCHITECTURE.md exists at the repo root, so the README link resolves."
     ]
   },
-  "decisionRationale": "APPROVE. Both LOOP blockers are verified fixed: the import-time pymupdf4llm hint (critical) is suppressed by an os.environ.setdefault before the converter import, and the buffered broken pipe (blocking warning) now surfaces as the documented `Error: could not write to stdout: ...` plus exit 1 with no shutdown 'Exception ignored'. The third warning (missing skip-derivation test) is addressed by test_main_stdout_skips_output_derivation. The suite is green (41 passed, 89.04% >= 85%, cli.py 93%), stdout redirection is byte-identical to an -o run, conflict handling exits 2 in both orders, and all four essential reviewers return PASS with 0 critical and 0 warnings. Remaining items are non-blocking suggestions: optional hardening (subprocess/fresh-interpreter/ValueError tests, docs for niche stdout cases) and ask-first or prohibited cleanups (stale spec wording, flake.nix comment). No critical issues, so criticalCount is 0 and the change is approved to proceed to the ship checkpoint."
+  "decisionRationale": "APPROVE. This is a docs-only Quick Mode change (README 243 -> 77 lines; `git status` shows only README.md modified). The three edits applied after the reviewers' re-review are verified accurate against source: the broken-pipe sentence now attributes exit 1 to pdf2md when the reader closes early (cli.py:151-169), 'empty output file' is correct for any `-o` destination (cli.py:130-149), and the `--pages` limitation matches the parser, which has no page-range option (cli.py:47-71). All five selected reviewers return PASS with 0 critical and 0 warnings; the Developer's green suite (41 passed, 89.04% >= 85%) is accepted for this README-only diff. Remaining items are non-blocking suggestions: optional pre-existing test gaps, unpinned (but canonical HTTPS) install refs, the internal env-var caveat kept in ARCHITECTURE, README/ARCHITECTURE contract duplication, and one pre-existing ARCHITECTURE wording nit. No critical issues, so criticalCount is 0 and the change is approved to proceed to the ship checkpoint."
 }
