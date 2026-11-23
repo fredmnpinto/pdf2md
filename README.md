@@ -64,34 +64,38 @@ Without Nix (Python >= 3.11): `pip install -e '.[dev]'`
 
 ## Releasing
 
-Releases are cut locally from a clean `main`; there is no CI release workflow.
+Releases are cut locally with `make release`; the GitHub Release itself is created by [`.github/workflows/release.yml`](.github/workflows/release.yml) after the tag is pushed. Release creation is asynchronous, and no local `gh` or personal access token is needed.
 
 Prerequisites:
 
 - **GNU make** and **bash** on `PATH` (the script uses `set -euo pipefail` and bash-only constructs), plus `git`.
-- An authenticated [`gh`](https://cli.github.com/) on `PATH`. `gh` is a host tool and is not added to the Nix dev shell, so install it separately and run `gh auth login` once.
 - `main` checked out, clean, and equal to `origin/main` (the script fetches and verifies this).
 - Python/pytest from `nix develop` (or an equivalent dev environment: `pip install -e '.[dev]'`).
+- GitHub Actions enabled for the repository, with workflow permissions allowing `contents: write`. If the repository default is read-only, set it under Settings → Actions → General → Workflow permissions.
 
 ```bash
-make release 1.0.0           # publish: bump, commit, tag, push, GitHub Release
+make release 1.0.0           # publish: bump, commit, tag, push; the workflow creates the release
 make release VERSION=1.0.0   # equivalent make-variable form
 make release 1.0.0 DRY_RUN=1 # print the plan; change nothing
 ```
 
-`make release` without `DRY_RUN=1` is the publishing command. The tag is always `v<version>`; a leading `v` is accepted and stripped. A `-prerelease` suffix before any `+build` metadata adds `--prerelease` to the GitHub Release; build metadata alone does not (`1.0.0-rc.1` is a prerelease, `1.0.0+build.1` is not).
+`make release` without `DRY_RUN=1` is the publishing command. The tag is always `v<version>`; a leading `v` is accepted and stripped. A `-prerelease` suffix before any `+build` metadata makes the workflow add `--prerelease`; build metadata alone does not (`1.0.0-rc.1` is a prerelease, `1.0.0+build.1` is not).
+
+`VERSION=` is honored only as a command-line make variable; an exported environment `VERSION` is ignored. Only an unset `DRY_RUN` defaults to `0`; an explicitly empty `DRY_RUN=` is an error (exit `2`). `DRY_RUN=1` validates the version and the current version files, prints the plan, skips preflight and tests, and changes nothing.
 
 Before preflight, `read_current_versions` requires exactly one `__version__` line in `src/pdf2md/__init__.py`, exactly one literal `version = "...";` line in `flake.nix`, and identical values (`version mismatch: ...; synchronize them first`); the target version must also differ from the current one (`version is already <version>; nothing to release`).
 
-The 14 preflight checks then run in order, before tests and before any mutation: (1) `git` installed, (2) `gh` installed, (3) `python` installed, (4) inside a git repository, (5) the `origin` fetch URL and **every** `origin` push URL point to `github.com/fredmnpinto/pdf2md` (credentials redacted as `https://***@github.com/...`), (6) clean tree including untracked files, (7) on `main`, (8) `user.name`/`user.email` configured, (9) `gh auth status` succeeds, (10) `git fetch origin main` succeeds, (11) `HEAD == origin/main`, (12) local tag absent, (13) remote tag absent, (14) GitHub Release absent (pinned `gh release view --repo fredmnpinto/pdf2md`).
+The 12 preflight checks then run in order, before tests and before any mutation: (1) `git` installed, (2) `python` installed, (3) inside a git repository, (4) the `origin` fetch URL points to `github.com/fredmnpinto/pdf2md`, (5) **every** `origin` push URL is canonical (credentials redacted as `https://***@github.com/...`), (6) clean tree including untracked files, (7) on `main`, (8) `user.name`/`user.email` configured, (9) `git fetch origin main` succeeds, (10) `HEAD == origin/main`, (11) local tag absent, (12) remote tag absent.
 
-It then runs `python -m pytest --cov=pdf2md` (the 85% gate), re-verifies `HEAD` and the clean tree, rewrites the two version files, commits only those files (`git commit --only -m "chore: release v<version>" -- src/pdf2md/__init__.py flake.nix`), creates the annotated tag, pushes `main` + tag atomically, and runs `gh release create v<version> --repo fredmnpinto/pdf2md --title v<version> --generate-notes --verify-tag`.
+It then runs `python -m pytest --cov=pdf2md` (the 85% gate), re-verifies `HEAD` and the clean tree, rewrites the two version files, commits only those files (`git commit --only -m "chore: release v<version>" -- src/pdf2md/__init__.py flake.nix`), creates the annotated tag, pushes `main` + tag atomically, prints the Actions URL (`https://github.com/fredmnpinto/pdf2md/actions/workflows/release.yml`), and exits `0`. It never calls `gh`.
 
-It does not run CI, build or upload dists/assets, publish to PyPI, maintain a changelog, choose a version, sign tags, or open a PR — the release commit goes directly to `main`.
+The Release workflow runs on every push to `main` and on manual dispatch with an optional `tag`. On the automatic path it releases only when exactly one `v[0-9]*` tag points at `HEAD`: no tag is a successful no-op (`no release tag at HEAD`), one tag creates the release, and multiple tags fail. It is idempotent (an existing release is left alone), creates the release with `--title v<version> --generate-notes --verify-tag --repo fredmnpinto/pdf2md`, adds `--prerelease` only for a prerelease tag, uses `GITHUB_TOKEN` with `contents: write`, and serializes runs with a concurrency group.
 
-`VERSION=` is honored only as a command-line make variable; an exported environment `VERSION` is ignored. Only an unset `DRY_RUN` defaults to `0`; an explicitly empty `DRY_RUN=` is an error (exit `2`).
+To backfill or retry a release for an existing tag (including the already-pushed `v1.0.0`), run Actions → Release → Run workflow and enter the tag. The tag is never moved or recreated. If the workflow fails, re-run it from Actions.
 
-If a step after the version bump fails before the commit, the script restores both version files. If tag creation, the atomic push, or the GitHub Release fails, the commit/tag state is kept and the script prints the exact `git tag`, `git push --atomic`, and/or `gh release create ... --repo fredmnpinto/pdf2md` commands to finish; re-running `make release` is unnecessary and stops at the existing tag. GNU make reports exit code `2` when the release recipe fails even when the script itself exits `1` (preflight, test, or mutation failure); the script's usage/version errors are `2`.
+If tag creation or the atomic push fails, the script keeps whatever commit/tag state exists locally and prints the exact `git tag` and/or `git push --atomic` commands to finish; re-running `make release` is unnecessary and stops at the existing tag. Release creation is asynchronous, so `make release` exiting `0` means the tag is pushed, not that the release exists; check the Actions run or the Releases page. GNU make reports exit code `2` when the release recipe fails even when the script itself exits `1` (preflight, test, or mutation failure); the script's usage/version errors are `2`.
+
+It does not run `gh` locally or create the release itself; it also does not run CI version bumps/tests/tagging/pushing, build or upload dists/assets, publish to PyPI, maintain a changelog, choose a version automatically, sign tags, or open a PR — the release commit goes directly to `main`. The workflow only creates the GitHub Release.
 
 Pin installs to a release tag:
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# scripts/release.sh — cut a tagged GitHub release for pdf2md.
+# scripts/release.sh — bump, tag, and push a pdf2md release.
 #
 # Normally invoked through the Makefile:
 #   make release <version> [DRY_RUN=1]
@@ -8,12 +8,12 @@
 # Flow: validate the version and the current version files, run the preflight
 # checks, run `python -m pytest --cov=pdf2md` (85% coverage gate), rewrite
 # src/pdf2md/__init__.py and flake.nix, commit `chore: release v<version>`,
-# create the annotated tag, push main + tag atomically, and create the GitHub
-# Release with generated notes.
+# create the annotated tag, and push main + tag atomically. The GitHub Actions
+# Release workflow (.github/workflows/release.yml) then creates the GitHub
+# Release with generated notes; release creation is asynchronous.
 #
 # Exit codes: 0 success (including dry-run), 1 preflight/test/mutation failure,
-# 2 usage or version error. Progress goes to stderr; `gh`'s release URL stays
-# on stdout.
+# 2 usage or version error. Progress goes to stderr.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -24,6 +24,7 @@ FLAKE_FILE="flake.nix"
 MAIN_BRANCH="main"
 REMOTE="origin"
 REPO_SLUG="fredmnpinto/pdf2md"
+WORKFLOW_URL="https://github.com/${REPO_SLUG}/actions/workflows/release.yml"
 CANONICAL_ORIGIN_RE='^(git@github\.com:|ssh://git@github\.com/|https://github\.com/)fredmnpinto/pdf2md(\.git)?$'
 
 BUMPED=0
@@ -57,8 +58,10 @@ DRY_RUN=1
   Print the release plan; change nothing (preflight and tests are skipped).
 
 The release command runs preflight checks and the test suite, bumps
-src/pdf2md/__init__.py and flake.nix, commits, tags v<version>, pushes
-atomically, and creates a GitHub release with generated notes.
+src/pdf2md/__init__.py and flake.nix, commits, tags v<version>, and pushes
+main + tag atomically. The GitHub Actions Release workflow
+(.github/workflows/release.yml) then creates the GitHub release with
+generated notes; release creation is asynchronous.
 
 Exit codes: 0 success (including dry-run), 1 preflight/test/mutation failure,
 2 usage or version error.
@@ -82,19 +85,6 @@ redact_url() {
     else
         printf '%s' "$url"
     fi
-}
-
-is_prerelease() {
-    local core="${VERSION%%+*}"
-    [[ "$core" == *-* ]]
-}
-
-print_release_command() {
-    local cmd="gh release create $TAG --repo $REPO_SLUG --title $TAG --generate-notes --verify-tag"
-    if is_prerelease; then
-        cmd+=" --prerelease"
-    fi
-    printf '%s\n' "$cmd"
 }
 
 # The release must not commit a HEAD that moved after preflight.
@@ -141,7 +131,7 @@ read_current_versions() {
 
 print_plan() {
     {
-        printf 'DRY RUN: no files, commits, tags, pushes, or GitHub releases will be created.\n'
+        printf 'DRY RUN: no files, commits, tags, pushes, or workflow runs will be created.\n'
         printf 'DRY RUN: preflight checks and the test suite are skipped.\n'
         printf '\n'
         printf 'Current version: %s\n' "$CURRENT_INIT_VERSION"
@@ -150,19 +140,17 @@ print_plan() {
         printf '\n'
         printf 'Preflight checks a real run would perform:\n'
         printf '  1. git is installed\n'
-        printf '  2. gh (GitHub CLI) is installed\n'
-        printf '  3. python is installed\n'
-        printf '  4. inside a git repository\n'
-        printf '  5. origin fetch URL and every push URL point to github.com/fredmnpinto/pdf2md\n'
+        printf '  2. python is installed\n'
+        printf '  3. inside a git repository\n'
+        printf '  4. origin fetch URL points to github.com/fredmnpinto/pdf2md\n'
+        printf '  5. every origin push URL points to github.com/fredmnpinto/pdf2md\n'
         printf '  6. working tree is clean (including untracked files)\n'
         printf '  7. current branch is %s\n' "$MAIN_BRANCH"
         printf '  8. git user.name and user.email are configured\n'
-        printf '  9. gh auth status succeeds\n'
-        printf ' 10. git fetch %s %s succeeds\n' "$REMOTE" "$MAIN_BRANCH"
-        printf ' 11. HEAD equals %s/%s\n' "$REMOTE" "$MAIN_BRANCH"
-        printf ' 12. local tag %s does not exist\n' "$TAG"
-        printf ' 13. remote tag %s does not exist\n' "$TAG"
-        printf ' 14. GitHub release %s does not exist (gh release view --repo %s)\n' "$TAG" "$REPO_SLUG"
+        printf '  9. git fetch %s %s succeeds\n' "$REMOTE" "$MAIN_BRANCH"
+        printf ' 10. HEAD equals %s/%s\n' "$REMOTE" "$MAIN_BRANCH"
+        printf ' 11. local tag %s does not exist\n' "$TAG"
+        printf ' 12. remote tag %s does not exist\n' "$TAG"
         printf '\n'
         printf 'DRY-RUN: python -m pytest --cov=pdf2md (skipped)\n'
         printf 'DRY-RUN: set __version__ = "%s" in %s\n' "$VERSION" "$INIT_FILE"
@@ -170,14 +158,17 @@ print_plan() {
         printf 'DRY-RUN: git commit --only -m "chore: release %s" -- %s %s\n' "$TAG" "$INIT_FILE" "$FLAKE_FILE"
         printf 'DRY-RUN: git tag -a %s -m "pdf2md %s"\n' "$TAG" "$TAG"
         printf 'DRY-RUN: git push --atomic %s %s %s\n' "$REMOTE" "$MAIN_BRANCH" "$TAG"
-        printf 'DRY-RUN: '
-        print_release_command
+        printf 'DRY-RUN: the Release workflow (.github/workflows/release.yml) creates the GitHub release:\n'
+        printf 'DRY-RUN:   triggers: push to main, or manual dispatch with an existing tag\n'
+        printf 'DRY-RUN:   automatic gate: exactly one v* tag at HEAD; none = successful no-op; multiple = failure\n'
+        printf 'DRY-RUN:   idempotent: an existing release is left alone\n'
+        printf "DRY-RUN:   prerelease: a '-' before any '+build' adds --prerelease\n"
+        printf 'DRY-RUN:   workflow URL: %s\n' "$WORKFLOW_URL"
     } >&2
 }
 
 preflight() {
     command -v git >/dev/null 2>&1 || die "git is not installed"
-    command -v gh >/dev/null 2>&1 || die "gh (GitHub CLI) is not installed; install it or run inside 'nix develop'"
     command -v python >/dev/null 2>&1 || die "python is not installed; run inside 'nix develop'"
 
     git rev-parse --git-dir >/dev/null 2>&1 || die "not inside a git repository"
@@ -217,8 +208,6 @@ preflight() {
     [[ -n "$(git config user.email || true)" ]] \
         || die "git user.email is not configured; run 'git config user.email \"you@example.com\"'"
 
-    gh auth status >/dev/null 2>&1 || die "gh is not authenticated; run 'gh auth login'"
-
     git fetch origin main >/dev/null 2>&1 || die "could not fetch origin/main"
 
     local head_sha remote_sha
@@ -238,10 +227,6 @@ preflight() {
         || die "could not query remote tags from origin"
     if [[ -n "$remote_tag" ]]; then
         die "tag $TAG already exists on origin"
-    fi
-
-    if gh release view "$TAG" --repo "$REPO_SLUG" >/dev/null 2>&1; then
-        die "GitHub release $TAG already exists"
     fi
 }
 
@@ -287,7 +272,7 @@ PY
     grep -qF "version = \"$VERSION\";" "$FLAKE_FILE" || die "failed to update $FLAKE_FILE"
 }
 
-commit_tag_push_release() {
+commit_tag_push() {
     STAGE=commit
     # The version files are intentionally dirty; HEAD must not have moved.
     verify_head_unchanged
@@ -300,14 +285,9 @@ commit_tag_push_release() {
     STAGE=push
     git push --atomic "$REMOTE" "$MAIN_BRANCH" "$TAG"
 
-    STAGE=release
-    if is_prerelease; then
-        gh release create "$TAG" --repo "$REPO_SLUG" --title "$TAG" --generate-notes --verify-tag --prerelease
-    else
-        gh release create "$TAG" --repo "$REPO_SLUG" --title "$TAG" --generate-notes --verify-tag
-    fi
-
     STAGE=""
+    info "Pushed $TAG; the Release workflow will create the GitHub Release."
+    printf '%s\n' "$WORKFLOW_URL" >&2
 }
 
 on_exit() {
@@ -332,20 +312,14 @@ on_exit() {
                 printf 'Finish the release with:\n' >&2
                 printf '  git tag -a %s -m "pdf2md %s"\n' "$TAG" "$TAG" >&2
                 printf '  git push --atomic %s %s %s\n' "$REMOTE" "$MAIN_BRANCH" "$TAG" >&2
-                printf '  ' >&2
-                print_release_command >&2
+                printf 'The Release workflow creates the GitHub release once the tag is pushed.\n' >&2
+                printf 'Retrying "make release" is not needed and will fail because tag %s already exists.\n' "$TAG" >&2
                 ;;
             push)
                 printf '\nThe release commit and tag exist locally but were not pushed.\n' >&2
                 printf 'Resolve the push error (for example, fetch/rebase if origin/main moved), then run:\n' >&2
                 printf '  git push --atomic %s %s %s\n' "$REMOTE" "$MAIN_BRANCH" "$TAG" >&2
-                printf '  ' >&2
-                print_release_command >&2
-                ;;
-            release)
-                printf '\nThe commit and tag are pushed, but the GitHub release was not created.\n' >&2
-                printf 'Create it with:\n  ' >&2
-                print_release_command >&2
+                printf 'The Release workflow creates the GitHub release once the tag is pushed.\n' >&2
                 printf 'Retrying "make release" is not needed and will fail because tag %s already exists.\n' "$TAG" >&2
                 ;;
         esac
@@ -388,7 +362,6 @@ run_tests
 verify_head_unchanged
 verify_tree_clean
 bump_versions
-commit_tag_push_release
+commit_tag_push
 
-info "Released $TAG"
 exit 0

@@ -6,6 +6,7 @@
 # unknown goals must still fail.
 #
 # The release logic lives in scripts/release.sh; this file only dispatches.
+# The GitHub Release itself is created by .github/workflows/release.yml.
 
 .DEFAULT_GOAL := help
 .PHONY: help release
@@ -67,8 +68,9 @@ help:
 	  'VERSION environment variable is ignored.' \
 	  '' \
 	  'The release script runs preflight checks and the test suite, bumps' \
-	  'src/pdf2md/__init__.py and flake.nix, commits, tags v<version>, pushes' \
-	  'atomically, and creates a GitHub release with generated notes.'
+	  'src/pdf2md/__init__.py and flake.nix, commits, tags v<version>, and' \
+	  'pushes atomically. The GitHub Actions Release workflow then creates' \
+	  'the GitHub release with generated notes.'
 
 release:
 	@bash scripts/release.sh
