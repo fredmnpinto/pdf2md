@@ -22,8 +22,10 @@
         # `pip`/`setuptools`/`wheel` are included so the editable install in the
         # shellHook actually has a build backend available (a bare withPackages
         # env omits them, which makes `pip install -e .` silently no-op).
+        # `build`, `twine`, and `packaging` are the release build-gate tools used
+        # by scripts/release.sh and the Release workflow.
         pythonEnv = pkgs.python3.withPackages
-          (ps: [ ps.pymupdf ps.pymupdf4llm ps.pytest ps.pytest-cov ps.pip ps.setuptools ps.wheel ]);
+          (ps: [ ps.pymupdf ps.pymupdf4llm ps.pytest ps.pytest-cov ps.build ps.twine ps.packaging ps.pip ps.setuptools ps.wheel ]);
 
         # Globally installable / runnable package:
         #   nix profile install github:fredmnpinto/pdf2md

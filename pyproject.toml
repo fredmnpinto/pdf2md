@@ -6,13 +6,34 @@ build-backend = "setuptools.build_meta"
 name = "pdf2md"
 dynamic = ["version"]
 description = "Convert PDF files to Markdown via the pymupdf4llm converter (PyMuPDF)"
+readme = "README.md"
 requires-python = ">=3.11"
 license = "AGPL-3.0-or-later"
 license-files = ["LICENSE"]
+authors = [{ name = "Frederico Pinto" }]
+keywords = ["pdf", "markdown", "pymupdf", "pymupdf4llm", "cli", "document-conversion"]
+classifiers = [
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Text Processing :: Markup",
+    "Topic :: Utilities",
+]
 dependencies = ["pymupdf>=1.28,<3", "pymupdf4llm>=0.3,<3"]
 
 [project.optional-dependencies]
-dev = ["pytest", "pytest-cov"]
+dev = ["pytest", "pytest-cov", "build", "twine", "packaging"]
+
+[project.urls]
+Homepage = "https://github.com/fredmnpinto/pdf2md"
+Repository = "https://github.com/fredmnpinto/pdf2md"
+Issues = "https://github.com/fredmnpinto/pdf2md/issues"
 
 [project.scripts]
 pdf2md = "pdf2md.cli:main"

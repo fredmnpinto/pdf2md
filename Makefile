@@ -1,12 +1,15 @@
 # Makefile — developer entry points for pdf2md.
 #
-# `make release 1.0.0` passes the version as a positional goal. GNU make would
-# otherwise fail with "No rule to make target '1.0.0'", so a no-op rule is
+# `make release 1.0.1` passes the version as a positional goal. GNU make would
+# otherwise fail with "No rule to make target '1.0.1'", so a no-op rule is
 # generated for that exact token. There is deliberately no `%:` catch-all:
 # unknown goals must still fail.
 #
 # The release logic lives in scripts/release.sh; this file only dispatches.
-# The GitHub Release itself is created by .github/workflows/release.yml.
+# The script validates and tests, bumps the version files, builds and checks
+# the sdist/wheel locally, then commits, tags, and pushes. The Release workflow
+# (.github/workflows/release.yml) creates the GitHub Release and publishes the
+# distributions to PyPI.
 
 .DEFAULT_GOAL := help
 .PHONY: help release
@@ -60,17 +63,20 @@ help:
 	@printf '%s\n' \
 	  'pdf2md developer targets:' \
 	  '' \
-	  '  make release <version>           e.g. make release 1.0.0' \
-	  '  make release VERSION=<version>   e.g. make release VERSION=1.0.0' \
+	  '  make release <version>           e.g. make release 1.0.1' \
+	  '  make release VERSION=<version>   e.g. make release VERSION=1.0.1' \
 	  '  make release <version> DRY_RUN=1 print the plan; change nothing' \
 	  '' \
 	  'VERSION= is honored only when passed on the command line; an exported' \
 	  'VERSION environment variable is ignored.' \
 	  '' \
 	  'The release script runs preflight checks and the test suite, bumps' \
-	  'src/pdf2md/__init__.py and flake.nix, commits, tags v<version>, and' \
-	  'pushes atomically. The GitHub Actions Release workflow then creates' \
-	  'the GitHub release with generated notes.'
+	  'src/pdf2md/__init__.py and flake.nix, builds and checks the sdist/wheel' \
+	  'locally (rm -rf dist, python -P -m build, python -m twine check dist/*,' \
+	  'wheel METADATA version check), commits, tags v<version>, and pushes' \
+	  'atomically. The GitHub Actions Release workflow then builds the tag,' \
+	  'creates the GitHub Release with generated notes, and publishes the' \
+	  'distributions to PyPI via Trusted Publishing.'
 
 release:
 	@bash scripts/release.sh

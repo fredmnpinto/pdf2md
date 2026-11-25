@@ -1,19 +1,21 @@
 #!/usr/bin/env bash
-# scripts/release.sh — bump, tag, and push a pdf2md release.
+# scripts/release.sh — bump, build, tag, and push a pdf2md release.
 #
 # Normally invoked through the Makefile:
 #   make release <version> [DRY_RUN=1]
 #   make release VERSION=<version> [DRY_RUN=1]
 #
-# Flow: validate the version and the current version files, run the preflight
-# checks, run `python -m pytest --cov=pdf2md` (85% coverage gate), rewrite
-# src/pdf2md/__init__.py and flake.nix, commit `chore: release v<version>`,
-# create the annotated tag, and push main + tag atomically. The GitHub Actions
-# Release workflow (.github/workflows/release.yml) then creates the GitHub
-# Release with generated notes; release creation is asynchronous.
+# Flow: validate the version (shape + PEP 440) and the current version files,
+# run the preflight checks, run `python -m pytest --cov=pdf2md` (85% coverage
+# gate), rewrite src/pdf2md/__init__.py and flake.nix, build and check the
+# sdist/wheel locally, commit `chore: release v<version>`, create the
+# annotated tag, and push main + tag atomically. The GitHub Actions Release
+# workflow (.github/workflows/release.yml) then builds the tag, creates the
+# GitHub Release with generated notes, and publishes the distributions to PyPI
+# via Trusted Publishing; release creation and publishing are asynchronous.
 #
-# Exit codes: 0 success (including dry-run), 1 preflight/test/mutation failure,
-# 2 usage or version error. Progress goes to stderr.
+# Exit codes: 0 success (including dry-run), 1 preflight/test/build/mutation
+# failure, 2 usage or version error. Progress goes to stderr.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -32,6 +34,8 @@ COMMITTED=0
 STAGE=""
 VERSION=""
 TAG=""
+PYPI_VERSION=""
+IS_PRERELEASE=""
 PREFLIGHT_HEAD=""
 CURRENT_INIT_VERSION=""
 CURRENT_FLAKE_VERSION=""
@@ -50,21 +54,26 @@ usage: make release <version> [DRY_RUN=1]
        make release VERSION=<version> [DRY_RUN=1]
 
 <version>
-  MAJOR.MINOR.PATCH with optional -prerelease and +build suffixes; an
-  optional leading "v" is accepted and stripped (the tag is always
-  v<version>). Examples: 1.0.0, v1.2.3, 2.0.0-rc.1, 1.0.0+build.1
+  MAJOR.MINOR.PATCH with an optional -prerelease suffix that starts with a
+  letter; an optional leading "v" is accepted and stripped (the tag is always
+  v<version>). Examples: 1.0.1, v1.2.3, 2.0.0-rc.1.
+  "+build" is rejected: PyPI does not accept local version identifiers.
 
 DRY_RUN=1
-  Print the release plan; change nothing (preflight and tests are skipped).
+  Print the release plan; change nothing (preflight, tests, and the build
+  gate are skipped). A dry run only needs "packaging" to validate the version.
 
 The release command runs preflight checks and the test suite, bumps
-src/pdf2md/__init__.py and flake.nix, commits, tags v<version>, and pushes
-main + tag atomically. The GitHub Actions Release workflow
-(.github/workflows/release.yml) then creates the GitHub release with
-generated notes; release creation is asynchronous.
+src/pdf2md/__init__.py and flake.nix, builds and checks the sdist/wheel
+locally (build, twine, and packaging are required), commits, tags v<version>,
+and pushes main + tag atomically. The GitHub Actions Release workflow
+(.github/workflows/release.yml) then builds the tag, creates the GitHub
+Release with generated notes, and publishes the distributions to PyPI via
+Trusted Publishing (tag -> build -> release -> publish); release creation and
+publishing are asynchronous.
 
-Exit codes: 0 success (including dry-run), 1 preflight/test/mutation failure,
-2 usage or version error.
+Exit codes: 0 success (including dry-run), 1 preflight/test/build/mutation
+failure, 2 usage or version error.
 EOF
 }
 
@@ -131,12 +140,14 @@ read_current_versions() {
 
 print_plan() {
     {
-        printf 'DRY RUN: no files, commits, tags, pushes, or workflow runs will be created.\n'
-        printf 'DRY RUN: preflight checks and the test suite are skipped.\n'
+        printf 'DRY RUN: no files, commits, tags, pushes, workflow runs, or PyPI uploads will be created.\n'
+        printf 'DRY RUN: preflight checks, the test suite, and the local build gate are skipped.\n'
         printf '\n'
         printf 'Current version: %s\n' "$CURRENT_INIT_VERSION"
-        printf 'Target version:  %s\n' "$VERSION"
-        printf 'Tag:             %s\n' "$TAG"
+        printf 'Target version: %s\n' "$VERSION"
+        printf 'Tag: %s\n' "$TAG"
+        printf 'PyPI version: %s\n' "$PYPI_VERSION"
+        printf 'Prerelease: %s\n' "$IS_PRERELEASE"
         printf '\n'
         printf 'Preflight checks a real run would perform:\n'
         printf '  1. git is installed\n'
@@ -155,14 +166,28 @@ print_plan() {
         printf 'DRY-RUN: python -m pytest --cov=pdf2md (skipped)\n'
         printf 'DRY-RUN: set __version__ = "%s" in %s\n' "$VERSION" "$INIT_FILE"
         printf 'DRY-RUN: set version = "%s"; in %s\n' "$VERSION" "$FLAKE_FILE"
+        printf 'DRY-RUN: local build gate (after the bump, before commit/tag/push):\n'
+        printf 'DRY-RUN:   rm -rf dist\n'
+        printf 'DRY-RUN:   python -P -m build\n'
+        printf 'DRY-RUN:   python -m twine check dist/*\n'
+        printf 'DRY-RUN:   verify exactly one dist/*.whl and its METADATA Version == %s\n' "$PYPI_VERSION"
         printf 'DRY-RUN: git commit --only -m "chore: release %s" -- %s %s\n' "$TAG" "$INIT_FILE" "$FLAKE_FILE"
         printf 'DRY-RUN: git tag -a %s -m "pdf2md %s"\n' "$TAG" "$TAG"
         printf 'DRY-RUN: git push --atomic %s %s %s\n' "$REMOTE" "$MAIN_BRANCH" "$TAG"
-        printf 'DRY-RUN: the Release workflow (.github/workflows/release.yml) creates the GitHub release:\n'
-        printf 'DRY-RUN:   triggers: push to main, or manual dispatch with an existing tag\n'
-        printf 'DRY-RUN:   automatic gate: exactly one v* tag at HEAD; none = successful no-op; multiple = failure\n'
-        printf 'DRY-RUN:   idempotent: an existing release is left alone\n'
-        printf "DRY-RUN:   prerelease: a '-' before any '+build' adds --prerelease\n"
+        printf 'DRY-RUN: the Release workflow (.github/workflows/release.yml) then runs four jobs:\n'
+        printf 'DRY-RUN:   tag -> build -> release -> publish (build before release; no local gh/PyPI upload)\n'
+        printf 'DRY-RUN:   tag: exactly one v* tag at HEAD; none = successful no-op; multiple = failure\n'
+        printf 'DRY-RUN:        manual dispatch validates and reuses an existing tag; tags are never moved\n'
+        printf 'DRY-RUN:   build: checks out the tag, rejects +build, validates PEP 440 and the\n'
+        printf 'DRY-RUN:          src/pdf2md/__init__.py match, runs python -m build and twine check,\n'
+        printf 'DRY-RUN:          and uploads the distributions artifact (contents: read)\n'
+        printf 'DRY-RUN:   release: creates the GitHub Release with generated notes (contents: write);\n'
+        printf 'DRY-RUN:            idempotent, --prerelease for a prerelease tag\n'
+        printf 'DRY-RUN:   publish: PyPI Trusted Publishing via pypa/gh-action-%s\n' 'pypi-publish@release/v1'
+        printf 'DRY-RUN:            (id-token: write, environment: pypi, skip-existing: true,\n'
+        printf 'DRY-RUN:            PEP 740 attestations, https://pypi.org/p/pdf2md)\n'
+        printf 'DRY-RUN:   one-time setup: PyPI pending publisher for pdf2md (owner fredmnpinto,\n'
+        printf 'DRY-RUN:                 repo pdf2md, workflow release.yml, environment pypi)\n'
         printf 'DRY-RUN:   workflow URL: %s\n' "$WORKFLOW_URL"
     } >&2
 }
@@ -272,6 +297,64 @@ PY
     grep -qF "version = \"$VERSION\";" "$FLAKE_FILE" || die "failed to update $FLAKE_FILE"
 }
 
+build_and_check_dist() {
+    STAGE=build
+    python -P -c 'import build, twine, packaging' >/dev/null 2>&1 \
+        || die "building the release requires build, twine, and packaging; install the dev extra with 'pip install -e \".[dev]\"' or run inside 'nix develop'"
+
+    info "building sdist and wheel ..."
+    # Stale artifacts must never be checked or uploaded.
+    rm -rf dist
+    # -P keeps the ignored local build/ directory from shadowing the module.
+    python -P -m build || die "building distributions failed; release aborted"
+
+    info "checking distribution metadata ..."
+    python -m twine check dist/* || die "distribution metadata check failed; release aborted"
+
+    info "verifying the built wheel version ..."
+    local wheels=()
+    shopt -s nullglob
+    wheels=(dist/*.whl)
+    shopt -u nullglob
+    if [[ "${#wheels[@]}" -ne 1 ]]; then
+        die "expected exactly one wheel in dist/, found ${#wheels[@]}"
+    fi
+
+    python - "$VERSION" "${wheels[0]}" <<'PY'
+import sys
+import zipfile
+from email.parser import Parser
+
+from packaging.version import InvalidVersion, Version
+
+target_raw, wheel_path = sys.argv[1:3]
+try:
+    target = Version(target_raw)
+except InvalidVersion:
+    sys.exit(f"error: target version '{target_raw}' is not a valid PEP 440 version")
+
+with zipfile.ZipFile(wheel_path) as zf:
+    metas = [name for name in zf.namelist() if name.endswith(".dist-info/METADATA")]
+    if len(metas) != 1:
+        sys.exit(
+            f"error: expected exactly one .dist-info/METADATA in {wheel_path}, "
+            f"found {len(metas)}"
+        )
+    msg = Parser().parsestr(zf.read(metas[0]).decode("utf-8"))
+
+built_raw = msg["Version"]
+if not built_raw:
+    sys.exit(f"error: {wheel_path} METADATA has no Version field")
+try:
+    built = Version(built_raw)
+except InvalidVersion:
+    sys.exit(f"error: built wheel version '{built_raw}' is not a valid PEP 440 version")
+if built != target:
+    sys.exit(f"error: built wheel version {built} does not match target {target}")
+print(f"built wheel version {built} matches target {target}")
+PY
+}
+
 commit_tag_push() {
     STAGE=commit
     # The version files are intentionally dirty; HEAD must not have moved.
@@ -286,7 +369,7 @@ commit_tag_push() {
     git push --atomic "$REMOTE" "$MAIN_BRANCH" "$TAG"
 
     STAGE=""
-    info "Pushed $TAG; the Release workflow will create the GitHub Release."
+    info "Pushed $TAG; the Release workflow will create the GitHub Release and publish to PyPI."
     printf '%s\n' "$WORKFLOW_URL" >&2
 }
 
@@ -312,14 +395,14 @@ on_exit() {
                 printf 'Finish the release with:\n' >&2
                 printf '  git tag -a %s -m "pdf2md %s"\n' "$TAG" "$TAG" >&2
                 printf '  git push --atomic %s %s %s\n' "$REMOTE" "$MAIN_BRANCH" "$TAG" >&2
-                printf 'The Release workflow creates the GitHub release once the tag is pushed.\n' >&2
+                printf 'The Release workflow creates the GitHub Release and publishes to PyPI once the tag is pushed.\n' >&2
                 printf 'Retrying "make release" is not needed and will fail because tag %s already exists.\n' "$TAG" >&2
                 ;;
             push)
                 printf '\nThe release commit and tag exist locally but were not pushed.\n' >&2
                 printf 'Resolve the push error (for example, fetch/rebase if origin/main moved), then run:\n' >&2
                 printf '  git push --atomic %s %s %s\n' "$REMOTE" "$MAIN_BRANCH" "$TAG" >&2
-                printf 'The Release workflow creates the GitHub release once the tag is pushed.\n' >&2
+                printf 'The Release workflow creates the GitHub Release and publishes to PyPI once the tag is pushed.\n' >&2
                 printf 'Retrying "make release" is not needed and will fail because tag %s already exists.\n' "$TAG" >&2
                 ;;
         esac
@@ -343,12 +426,43 @@ if [[ -z "$raw_version" ]]; then
     usage_error "missing version"
 fi
 
-version_re='^v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'
+# PyPI MUST NOT allow local version identifiers (PEP 440), so reject '+build'
+# before the shape check and explain why.
+if [[ "$raw_version" == *+* ]]; then
+    usage_error "invalid version '$raw_version': PyPI does not accept local version identifiers (+build); use a version without '+build' (e.g. 1.0.0 or 2.0.0-rc.1)"
+fi
+
+version_re='^v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[A-Za-z][0-9A-Za-z-]*(\.[0-9A-Za-z-]+)*)?$'
 if ! [[ "$raw_version" =~ $version_re ]]; then
-    usage_error "invalid version '$raw_version': expected MAJOR.MINOR.PATCH with optional -prerelease and +build suffix (e.g. 1.0.0, v1.2.3, 2.0.0-rc.1)"
+    usage_error "invalid version '$raw_version': expected MAJOR.MINOR.PATCH with an optional -prerelease suffix that starts with a letter (e.g. 1.0.0, v1.2.3, 2.0.0-rc.1); +build metadata is not supported"
 fi
 VERSION="${raw_version#v}"
 TAG="v${VERSION}"
+
+# `packaging` is authoritative for PEP 440; it is the only build tool the
+# dry-run needs.
+python -P -c 'import packaging.version' >/dev/null 2>&1 \
+    || die "packaging is required to validate versions; install the dev extra with 'pip install -e \".[dev]\"' or run inside 'nix develop'"
+
+if ! version_error="$(python -P - "$VERSION" <<'PY'
+import sys
+from packaging.version import InvalidVersion, Version
+
+raw = sys.argv[1]
+try:
+    parsed = Version(raw)
+except InvalidVersion:
+    print("not a valid PEP 440 version (e.g. 2.0.0-rc.1)")
+    sys.exit(1)
+if "-" in raw and not parsed.is_prerelease:
+    print("a '-' suffix must be a PEP 440 pre-release (e.g. -rc.1), not a post-release")
+    sys.exit(1)
+PY
+)"; then
+    usage_error "invalid version '$raw_version': $version_error"
+fi
+PYPI_VERSION="$(python -P -c 'import sys; from packaging.version import Version; print(Version(sys.argv[1]))' "$VERSION")"
+IS_PRERELEASE="$(python -P -c 'import sys; from packaging.version import Version; print("yes" if Version(sys.argv[1]).is_prerelease else "no")' "$VERSION")"
 
 read_current_versions
 
@@ -362,6 +476,7 @@ run_tests
 verify_head_unchanged
 verify_tree_clean
 bump_versions
+build_and_check_dist
 commit_tag_push
 
 exit 0
