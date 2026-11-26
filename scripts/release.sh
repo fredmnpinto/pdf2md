@@ -188,7 +188,7 @@ print_plan() {
         printf 'DRY-RUN:            PEP 740 attestations, https://pypi.org/project/pdf2md-cli/)\n'
         printf 'DRY-RUN:   one-time setup: PyPI pending publisher for pdf2md-cli (owner fredmnpinto,\n'
         printf 'DRY-RUN:                 repo pdf2md, workflow release.yml, Environment name pypi)\n'
-        printf 'DRY-RUN:   first pdf2md-cli release is 1.1.2; old tags v1.0.0/v1.1.0/v1.1.1 are GitHub-only\n'
+        printf 'DRY-RUN:   first pdf2md-cli release is 1.1.3; old tags v1.0.0/v1.1.0/v1.1.1/v1.1.2 are GitHub-only\n'
         printf 'DRY-RUN:   workflow URL: %s\n' "$WORKFLOW_URL"
     } >&2
 }
