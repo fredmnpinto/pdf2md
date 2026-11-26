@@ -184,10 +184,11 @@ print_plan() {
         printf 'DRY-RUN:   release: creates the GitHub Release with generated notes (contents: write);\n'
         printf 'DRY-RUN:            idempotent, --prerelease for a prerelease tag\n'
         printf 'DRY-RUN:   publish: PyPI Trusted Publishing via pypa/gh-action-%s\n' 'pypi-publish@release/v1'
-        printf 'DRY-RUN:            (id-token: write, environment: pypi, skip-existing: true,\n'
-        printf 'DRY-RUN:            PEP 740 attestations, https://pypi.org/p/pdf2md)\n'
-        printf 'DRY-RUN:   one-time setup: PyPI pending publisher for pdf2md (owner fredmnpinto,\n'
-        printf 'DRY-RUN:                 repo pdf2md, workflow release.yml, environment pypi)\n'
+        printf 'DRY-RUN:            (id-token: write, no GitHub environment, skip-existing: true,\n'
+        printf 'DRY-RUN:            PEP 740 attestations, https://pypi.org/project/pdf2md-cli/)\n'
+        printf 'DRY-RUN:   one-time setup: PyPI pending publisher for pdf2md-cli (owner fredmnpinto,\n'
+        printf 'DRY-RUN:                 repo pdf2md, workflow release.yml, Environment name blank)\n'
+        printf 'DRY-RUN:   first pdf2md-cli release is 1.1.2; old tags v1.0.0/v1.1.0/v1.1.1 are GitHub-only\n'
         printf 'DRY-RUN:   workflow URL: %s\n' "$WORKFLOW_URL"
     } >&2
 }

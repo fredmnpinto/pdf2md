@@ -3,7 +3,7 @@ requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "pdf2md"
+name = "pdf2md-cli"
 dynamic = ["version"]
 description = "Convert PDF files to Markdown via the pymupdf4llm converter (PyMuPDF)"
 readme = "README.md"

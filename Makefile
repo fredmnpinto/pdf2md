@@ -1,6 +1,6 @@
 # Makefile — developer entry points for pdf2md.
 #
-# `make release 1.0.1` passes the version as a positional goal. GNU make would
+# `make release 1.1.2` passes the version as a positional goal. GNU make would
 # otherwise fail with "No rule to make target '1.0.1'", so a no-op rule is
 # generated for that exact token. There is deliberately no `%:` catch-all:
 # unknown goals must still fail.
@@ -63,9 +63,11 @@ help:
 	@printf '%s\n' \
 	  'pdf2md developer targets:' \
 	  '' \
-	  '  make release <version>           e.g. make release 1.0.1' \
-	  '  make release VERSION=<version>   e.g. make release VERSION=1.0.1' \
+	  '  make release <version>           e.g. make release 1.1.2' \
+	  '  make release VERSION=<version>   e.g. make release VERSION=1.1.2' \
 	  '  make release <version> DRY_RUN=1 print the plan; change nothing' \
+	  '' \
+	  'PyPI distribution: pdf2md-cli; console command: pdf2md.' \
 	  '' \
 	  'VERSION= is honored only when passed on the command line; an exported' \
 	  'VERSION environment variable is ignored.' \
