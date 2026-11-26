@@ -3,4 +3,4 @@
 
 """pdf2md — convert PDF files to Markdown."""
 
-__version__ = "1.1.2"
+__version__ = "1.1.3"
