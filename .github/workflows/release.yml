@@ -188,6 +188,9 @@ jobs:
     needs: [tag, build, release]
     if: needs.tag.outputs.tag != ''
     runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/pdf2md-cli
     permissions:
       id-token: write
     steps:

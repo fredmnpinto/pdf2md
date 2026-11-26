@@ -131,7 +131,7 @@ The Release workflow runs on every push to `main` and on manual dispatch with an
 1. **`tag`** (`contents: read`) — on the automatic path it releases only when exactly one `v[0-9]*` tag points at `HEAD`: no tag is a successful no-op (`no release tag at HEAD; nothing to release`), and multiple tags fail. A manual `tag` must start with `v` and a digit, be a valid ref name, and exist on the remote.
 2. **`build`** (`contents: read`) — checks out the tag, rejects `+build`, validates the tag as PEP 440, rejects a `-` suffix that is not a pre-release, verifies the tag version matches `src/pdf2md/__init__.py` (normalized via `packaging.version.Version`), runs `python -m build` and `python -m twine check dist/*`, and uploads the distributions artifact.
 3. **`release`** (`contents: write`) — creates the GitHub Release with `--title v<version> --generate-notes --verify-tag --repo fredmnpinto/pdf2md`, adding `--prerelease` for a prerelease tag. It is idempotent: an existing release is left alone.
-4. **`publish`** (`id-token: write`, no `environment`) — downloads the exact artifact built by `build` and uploads it with `pypa/gh-action-pypi-publish@release/v1`, using `print-hash: true` and `skip-existing: true`. The PyPI trusted publisher's environment field must be blank to match.
+4. **`publish`** (`id-token: write`, GitHub environment `pypi` with URL `https://pypi.org/p/pdf2md-cli`) — downloads the exact artifact built by `build` and uploads it with `pypa/gh-action-pypi-publish@release/v1`, using `print-hash: true` and `skip-existing: true`. The PyPI trusted publisher's Environment name must be `pypi` to match.
 
 The jobs run in order `tag → build → release → publish`, so a build or metadata failure prevents both the GitHub Release and the PyPI upload. Runs are serialized by a `release` concurrency group. The workflow builds and publishes the distributions to PyPI as `pdf2md-cli` but does not attach them as GitHub release assets.
 
@@ -142,10 +142,10 @@ To retry a release for an existing tag (for example a `v1.1.2` release whose PyP
 The PyPI distribution is `pdf2md-cli`; the `pdf2md` name is registered on PyPI as an empty/unusable project and is not used. The installed command remains `pdf2md`. The first publish needs a one-time PyPI pending publisher (no API token or repository secret):
 
 1. Create a PyPI account and enable 2FA.
-2. On PyPI, open Account → Publishing → Add a new pending publisher, and enter: project `pdf2md-cli`, owner `fredmnpinto`, repository `pdf2md`, workflow `release.yml`, and leave **Environment name blank**.
+2. On PyPI, open Account → Publishing → Add a new pending publisher, and enter: project `pdf2md-cli`, owner `fredmnpinto`, repository `pdf2md`, workflow `release.yml`, and **Environment name `pypi`**.
 3. Do not create a PyPI API token or a `PYPI_API_TOKEN` secret.
 
-The publish job has no GitHub `environment:` block, so the PyPI publisher's environment field must be blank. If you want a manual approval gate, restore `environment: pypi` on the `publish` job in `.github/workflows/release.yml` (with the matching environment URL) and set the publisher's environment to `pypi`; the publish job then waits for approval after the GitHub Release has been created.
+The `publish` job runs in the `pypi` GitHub environment (`environment: { name: pypi, url: https://pypi.org/p/pdf2md-cli }`), so the PyPI publisher's Environment name must be `pypi`. The `pypi` environment can optionally have required reviewers; adding them is optional but strongly recommended, and the publish job then waits for approval after the GitHub Release has been created.
 
 The pending publisher does not reserve the name; it converts to a normal publisher on first use. Publish soon after configuring it. The first `pdf2md-cli` release is `1.1.2` (`make release 1.1.2`). The older tags `v1.0.0`, `v1.1.0`, and `v1.1.1` carry the old `pdf2md` distribution name and are GitHub-only; they cannot be backfilled to `pdf2md-cli`.
 
@@ -156,7 +156,7 @@ Recovery:
 - A local build-gate failure restores both version files; fix the tooling or build and re-run `make release`.
 - If tag creation or the atomic push fails, the script keeps whatever commit/tag state exists locally and prints the exact `git tag` and/or `git push --atomic` commands to finish; re-running `make release` is unnecessary and stops at the existing tag.
 - If the workflow fails, re-run it from Actions or dispatch it manually with the tag. The `release` job is idempotent and `skip-existing` handles files already on PyPI.
-- Release creation and publishing are asynchronous: `make release` exiting `0` means the tag is pushed, not that the GitHub Release or PyPI files exist. Check the Actions run, the Releases page, or PyPI. If a `pypi` environment approval gate is restored (see [PyPI](#pypi)), the publish job waits for approval.
+- Release creation and publishing are asynchronous: `make release` exiting `0` means the tag is pushed, not that the GitHub Release or PyPI files exist. Check the Actions run, the Releases page, or PyPI. If the `pypi` environment has required reviewers (see [PyPI](#pypi)), the publish job waits for approval.
 
 It does not run `gh` or upload to PyPI locally, and the workflow does not bump versions, run tests, create tags, push commits/tags, or open PRs. There are no GitHub release assets (the distributions go to PyPI), no TestPyPI publishing, no changelog, no automatic version selection, and no signed tags; the release commit goes directly to `main`. GNU make reports exit code `2` when the release recipe fails even when the script itself exits `1` (preflight, test, build, or mutation failure); the script's usage/version errors are `2`.
 
