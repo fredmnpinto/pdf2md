@@ -38,7 +38,7 @@
         # sync for `nix eval` / `nix search` output.
         pdf2md = pkgs.python3Packages.buildPythonApplication {
           pname = "pdf2md";
-          version = "1.1.1";
+          version = "1.1.2";
           pyproject = true;
           src = ./.;
           build-system = [ pkgs.python3Packages.setuptools ];
